@@ -8,7 +8,10 @@ export const COMMA = 531441 / 524288; // (3/2)^12 / 2^19  ≈ 23.46 cents of hea
 export const COMMA_CENTS = 1200 * Math.log2(COMMA);
 export const BEAT_HZ = HOME * COMMA - HOME; // 3.49 wobbles per second
 
-export const T = { I: 0, II: 4.5, III: 12.6, IV: 19.1, V: 26.6, END: 35.6 };
+// III is 12.7 s: six tunings, each segment shorter than the last (≈ ×0.8), the groove getting stranger
+const III_D = [3.6, 2.8, 2.2, 1.7, 1.35, 1.05]; // ×0.78 each
+const III_LEN = III_D.reduce((a, b) => a + b);
+export const T = { I: 0, II: 4.5, III: 12.6, IV: 12.6 + III_LEN, V: 12.6 + III_LEN + 7.5, END: 12.6 + III_LEN + 7.5 + 9.0 };
 export const DUR = T.END;
 
 const TAU_ = Math.PI * 2;
@@ -68,17 +71,18 @@ export const TEAR_T = T.III - 0.14;
 
 // ───────────────────────── III. twelve is a rounding error
 // axiom-within-an-axiom: the bar has as many steps as the octave has notes.
+// each tuning gets less time than the last; c = complexity 0 → 1 (straight → unhinged)
 export const III_SEGS = (() => {
   const defs = [
-    { d: 1.40, n: 12, P: 2, label: '12-EDO', meter: '12/16', warp: 1.0, sub: 'the default. a rounding error.' },
-    { d: 1.30, n: 19, P: 2, label: '19-EDO', meter: '19/16', warp: 1.3, sub: 'better thirds! stranger seconds!' },
-    { d: 1.20, n: 31, P: 2, label: '31-EDO', meter: '31/32', warp: 0.78, sub: 'Huygens was right and nobody listened' },
-    { d: 1.10, n: 53, P: 2, label: '53-EDO', meter: '53/64', warp: 1.4, sub: 'the comma-eater' },
-    { d: 0.95, n: 13, P: 3, label: '13ED3', meter: '13/16', warp: 0.72, sub: 'Bohlen–Pierce: the octave is FIRED' },
-    { d: 0.55, n: 24, P: 2, label: 'π-EDO', meter: 'π/4', warp: 1, sub: 'π notes per octave. why not.', cont: true },
+    { num: 12, den: 16, bars: 3, n: 12, P: 2, label: '12-EDO', warp: 1.0, sub: 'the default. a rounding error.' },
+    { num: 19, den: 16, bars: 1.5, n: 19, P: 2, label: '19-EDO', warp: 1.12, sub: 'better thirds, stranger seconds' },
+    { num: 31, den: 32, bars: 1, n: 31, P: 2, label: '31-EDO', warp: 0.85, sub: 'Huygens was right and nobody listened' },
+    { num: 53, den: 64, bars: 1, n: 53, P: 2, label: '53-EDO', warp: 1.3, sub: 'the comma-eater' },
+    { num: 13, den: 16, bars: 1, n: 13, P: 3, label: '13ED3', warp: 0.72, sub: 'Bohlen–Pierce: the octave is fired' },
+    { num: Math.PI, den: 4, bars: 1, n: 24, P: 2, label: 'π-EDO', warp: 1, sub: 'π notes per octave. why not.', cont: true, meter: 'π/4' },
   ];
   let t = T.III;
-  return defs.map((d, i) => { const s = { ...d, i, t0: t, t1: t + d.d }; t += d.d; return s; });
+  return defs.map((d, i) => { const s = { ...d, meter: d.meter || d.num + '/' + d.den, i, c: i / (defs.length - 1), d: III_D[i], bd: III_D[i] / d.bars, t0: t, t1: t + III_D[i] }; t += III_D[i]; return s; });
 })();
 export function segAt(t) { for (const s of III_SEGS) if (t < s.t1) return s; return III_SEGS[III_SEGS.length - 1]; }
 const PI_N = (u) => Math.exp(lerp(Math.log(24), Math.log(Math.PI), u * u));
@@ -97,41 +101,53 @@ export function padChord(tn) {
   const rs = tn.P === 3 ? [1, 5 / 3, 7 / 3, 3] : [1, 5 / 4, 3 / 2, 7 / 4];
   return rs.map((r) => 128 * Math.pow(tn.P, stepsFor(tn.n, tn.P, r) / tn.n));
 }
-// step times inside a bar, rubato-warped (each bar breathes differently)
+// step times, bar by bar, rubato-warped (only once things get weird: warp fades in with c)
+export const barPhase = (s, t) => { const u = clamp((t - s.t0) / s.bd, 0, s.bars); const b = Math.min(Math.floor(u), Math.ceil(s.bars) - 1); return { bar: b, u: u - b }; };
 function stepTimes(s) {
-  if (s.cont) return [0, 1, 2, 3].map((i) => s.t0 + s.d * (i / Math.PI)); // a bar of π steps: 3 and a bit
-  return Array.from({ length: s.n }, (_, i) => s.t0 + s.d * Math.pow(i / s.n, s.warp));
+  const out = [], w = lerp(1, s.warp, s.c);
+  for (let b = 0; b < s.bars; b++) {
+    const b0 = s.t0 + b * s.bd;
+    if (s.cont) { for (let i = 0; i < 4; i++) out.push({ t: b0 + s.bd * (i / Math.PI), i, N: 4, bar: b }); continue; } // π steps: 3 and a bit
+    const N = s.bars - b < 1 ? Math.round(s.n * (s.bars - b)) : s.n; // a half bar is a half bar
+    for (let i = 0; i < N; i++) out.push({ t: b0 + s.bd * Math.pow(i / s.n, w), i, N: s.n, bar: b, last: b >= s.bars - 1 && i >= N - Math.max(2, Math.round(s.n * 0.12)) });
+  }
+  return out;
 }
 export const III_EVENTS = (() => {
   const rnd = mulberry32(1729);
   const notes = [], drums = [];
   let walk = 0, prevN = 12;
   for (const s of III_SEGS) {
-    const times = stepTimes(s); const N = times.length;
-    const stepDur = s.d / N;
-    const kick = euclid(Math.min(7, Math.max(3, Math.round(N * 0.3))), N);
-    const snr = euclid(Math.min(4, Math.max(2, Math.round(N * 0.15))), N);
-    const sRot = Math.floor(N / 2) + (s.i % 2 ? 1 : -1);
-    const hat = euclid(Math.min(24, Math.max(5, Math.round(N * 0.6))), N);
-    const mel = euclid(Math.min(28, Math.max(7, Math.round(N * 0.7))), N);
-    for (let i = 0; i < N; i++) {
-      const t = times[i];
+    const steps = stepTimes(s), c = s.c;
+    const N = s.cont ? 4 : s.n, stepDur = s.bd / N;
+    // 12: a straight groove. from there, Euclid takes over and the rules loosen
+    const straight = s.i === 0;
+    const kick = straight ? [1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0] : euclid(Math.min(7, Math.max(3, Math.round(N * 0.3))), N);
+    const snr = straight ? [0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0] : euclid(Math.min(4, Math.max(2, Math.round(N * 0.15))), N);
+    const sRot = straight ? 0 : Math.floor(N / 2) + (s.i % 2 ? 1 : -1);
+    const hat = straight ? Array(12).fill(1) : euclid(Math.min(24, Math.max(5, Math.round(N * lerp(0.75, 0.6, c)))), N);
+    const mel = straight ? [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1] : euclid(Math.min(28, Math.max(7, Math.round(N * 0.7))), N);
+    for (const st of steps) {
+      const { t, i } = st;
       const tn = tuningAt(t + 1e-6);
-      const jit = () => (rnd() - 0.5) * 0.012;
-      if (kick[i]) { drums.push({ t, type: 'kick', vel: i === 0 ? 1 : 0.75 + 0.25 * rnd() }); drums.push({ t, type: 'bass', f: padChord(tn)[0] / 2, vel: 1 }); }
+      const jit = () => (rnd() - 0.5) * 0.014 * c;
+      if (kick[i]) { drums.push({ t, type: 'kick', vel: i === 0 ? 1 : 0.8 + 0.2 * rnd() * c }); drums.push({ t, type: 'bass', f: padChord(tn)[0] / 2, vel: 1 }); }
+      if (!straight && c > 0.5 && rnd() < 0.1 * c) drums.push({ t: t + stepDur * 0.5, type: 'kick', vel: 0.55 }); // off-grid kick
       const sn = snr[(i + N - sRot) % N];
       if (sn) drums.push({ t: t + jit(), type: 'snare', vel: 0.8 + 0.2 * rnd() });
-      else if (rnd() < 0.09) drums.push({ t: t + jit(), type: 'snare', vel: 0.25 });
-      if (hat[(i + 1) % N]) {
-        const rat = rnd() < 0.16 ? 3 : 1;
-        for (let r = 0; r < rat; r++) drums.push({ t: t + jit() + r * stepDur / rat, type: 'hat', vel: (0.45 + 0.55 * rnd()) * (r ? 0.7 : 1), open: rnd() < 0.08 });
+      else if (rnd() < 0.12 * c) drums.push({ t: t + jit(), type: 'snare', vel: 0.25 });
+      if (hat[(i + (straight ? 0 : 1)) % N]) {
+        const rat = rnd() < 0.2 * c ? (c > 0.7 && rnd() < 0.5 ? 4 : 3) : 1;
+        const accent = straight ? (i % 3 === 0 ? 0.9 : 0.5) : 0.45 + 0.55 * rnd();
+        for (let r = 0; r < rat; r++) drums.push({ t: t + jit() + r * stepDur / rat, type: 'hat', vel: accent * (r ? 0.7 : 1), open: straight ? i === 11 : rnd() < 0.1 * c + 0.02 });
       }
       // fill into the next tuning: an accelerating snare roll
-      if (i >= N - Math.max(2, Math.round(N * 0.12)) && s.i < III_SEGS.length - 1) {
-        for (let r = 0; r < 4; r++) drums.push({ t: t + r * stepDur / 4, type: 'snare', vel: 0.3 + 0.5 * ((i - (N - 3)) / 3) });
+      if (st.last && s.i < III_SEGS.length - 1) {
+        const rr = straight ? 2 : 4;
+        for (let r = 0; r < rr; r++) drums.push({ t: t + r * stepDur / rr, type: 'snare', vel: 0.3 + 0.4 * rnd() });
       }
       // melody: a random walk in the current tuning
-      if (mel[i] || s.cont) {
+      if (mel[i % mel.length] || s.cont) {
         const n = tn.n, P = tn.P;
         if (Math.round(n) !== prevN) { walk = Math.round(walk / prevN * n); prevN = Math.round(n); }
         const fifth = Math.max(1, stepsFor(n, P, P === 3 ? 7 / 3 : 3 / 2));

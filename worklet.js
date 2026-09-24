@@ -22,7 +22,8 @@ class Sine {
     this.a += 0.08 * (this.at - this.a);
     this.ph += this.inc;
     const L = this.lock;
-    if (L && t > L.from) { let e = (L.f * t + L.phi) - this.ph; e -= Math.round(e); this.ph += e * 0.00025; }
+    // (real time: the phase grid stays in tune at any speed)
+    if (L && t > L.from) { let e = (L.f * bus.tr + L.phi) - this.ph; e -= Math.round(e); this.ph += e * 0.00025; }
     if (this.ph >= 1) this.ph -= 1;
     const a = this.a;
     if (a < 1e-5) return true;
@@ -50,12 +51,11 @@ class ModalPluck {
       P.push({ fm, a, r: Math.exp(-1 / (tau * sr)), c: 1, s: 0, cw: 1, sw: 0, side: m % 2 ? 1 : -1 });
       norm += Math.abs(a);
     }
-    for (const p of P) p.a *= 2.2 / norm;
+    for (const p of P) p.a *= 2.75 / norm; // +2 dB: the body used to carry some of the level
     this.P = P; this.amp = amp; this.pan = pan; this.cnt = 0; this.rnd = rnd;
     this.gl1 = panL(clampP(pan - 0.2)); this.gr2 = panR(clampP(pan + 0.2));
     this.life = tau0 * 3.2; this.send = o.send ?? 0.32;
-    // body: three wooden modes kicked by the attack
-    this.body = [[178, 0.05], [392, 0.03], [845, 0.018]].map(([bf, bt]) => { const R = Math.exp(-1 / (bt * sr)), w = TAU * bf / sr; return { a1: 2 * R * Math.cos(w), a2: -R * R, y1: 0, y2: 0, g: Math.sin(w) }; });
+    this.xp = 0; // (no body resonator any more: it knocked)
   }
   run(t, bus) {
     const age = t - this.t0; if (age < 0) return true; if (age > this.life) return false;
@@ -68,12 +68,10 @@ class ModalPluck {
       const c = (p.c * p.cw - p.s * p.sw) * p.r, s = (p.c * p.sw + p.s * p.cw) * p.r; p.c = c; p.s = s;
       const y = s * p.a; if (p.side > 0) l += y; else r += y;
     }
-    // attack excitation → body + pick noise
-    let x = 0; if (age < 0.004) x = (this.rnd() * 2 - 1) * (1 - age / 0.004);
-    let b = 0; for (const m of this.body) { const y = m.a1 * m.y1 + m.a2 * m.y2 + x * m.g; m.y2 = m.y1; m.y1 = y; b += y; }
-    const pick = x * 0.12;
+    // pick: a 2 ms breath of high-passed noise, nothing low
+    let pick = 0; if (age < 0.002) { const x = (this.rnd() * 2 - 1) * (1 - age / 0.002); pick = (x - this.xp) * 0.03; this.xp = x; }
     const A = this.amp * Math.min(1, age / 0.0015);
-    const dl = (l * 0.8 + r * 0.2 + b * 0.35 + pick) * A, dr = (r * 0.8 + l * 0.2 + b * 0.35 + pick) * A;
+    const dl = (l * 0.8 + r * 0.2 + pick) * A, dr = (r * 0.8 + l * 0.2 + pick) * A;
     bus.l += dl * this.gl1; bus.r += dr * this.gr2;
     bus.s += (dl + dr) * 0.5 * this.send;
     return true;
@@ -191,10 +189,10 @@ class FDN {
 class CommaProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    this.running = false; this.dead = false; this.startAt = 0; this.offset = 0;
+    this.running = false; this.dead = false; this.startAt = 0; this.offset = 0; this.speed = 1;
     this.rnd = S.mulberry32(23460);
     this.voices = []; this.events = []; this.ei = 0;
-    this.bus = { l: 0, r: 0, s: 0 };
+    this.bus = { l: 0, r: 0, s: 0, tr: 0 };
     this.fdn = new FDN(sampleRate);
     this.hpL = 0; this.hpR = 0; this.xl = 0; this.xr = 0;
     const K = S.RHY_K;
@@ -205,11 +203,11 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.rPL = new Float64Array(K + 1); this.rPR = new Float64Array(K + 1);
     for (let k = 1; k <= K; k++) { const p = (k % 2 ? 1 : -1) * Math.min(0.85, k / 10); this.rPL[k] = panL(p); this.rPR[k] = panR(p); }
     this.port.onmessage = (e) => {
-      if (e.data.type === 'start') { this.startAt = e.data.at; this.offset = e.data.offset || 0; this.build(this.offset); this.running = true; }
+      if (e.data.type === 'start') { this.startAt = e.data.at; this.offset = e.data.offset || 0; this.speed = e.data.speed || 1; this.build(this.offset); this.running = true; }
       if (e.data.type === 'stop') { this.dead = true; this.voices = []; this.events = []; }
     };
     const po = options && options.processorOptions;
-    if (po && po.autostart) { this.startAt = po.at || 0; this.offset = po.offset || 0; this.build(this.offset); this.running = true; }
+    if (po && po.autostart) { this.startAt = po.at || 0; this.offset = po.offset || 0; this.speed = po.speed || 1; this.build(this.offset); this.running = true; }
   }
 
   build(t0) {
@@ -315,13 +313,14 @@ class CommaProcessor extends AudioWorkletProcessor {
 
     ev.sort((a, b) => a.t - b.t);
     this.events = ev.filter((e) => e.t >= t0 - 0.01); this.ei = 0;
-    const ph = S.rhyPhase(t0);
+    const ph = S.rhyPhase(t0) / this.speed;
     for (let k = 1; k <= S.RHY_K; k++) this.rc[k] = Math.floor(k * ph);
   }
 
   rhythmicon(t, bus) {
     const env = S.rhyEnvelope(t); if (env <= 0) return;
-    const r = S.rhyRate(t), ph = S.rhyPhase(t);
+    // pulse *rates* are real Hz (64 Hz must stay the tonic), so at speed ≠ 1 the phase is rescaled, not the rate
+    const r = S.rhyRate(t), ph = S.rhyPhase(t) / this.speed;
     const u = S.clamp((t - S.T.IV) / S.IV_ACC, 0, 1);
     if ((this.rcnt++ & 15) === 0) { // control rate: resonator decay shrinks as tempo climbs
       const tau = 0.06 * Math.pow(r, -0.62);
@@ -355,8 +354,10 @@ class CommaProcessor extends AudioWorkletProcessor {
     if (!this.running) return true;
     const sr = sampleRate; const bus = this.bus;
     for (let i = 0; i < L.length; i++) {
-      const t = currentTime + i / sr - this.startAt + this.offset;
-      if (t < this.offset) { L[i] = 0; Rr[i] = 0; continue; }
+      const tr = currentTime + i / sr - this.startAt; // real seconds since start
+      const t = this.offset + tr * this.speed;         // score time
+      bus.tr = tr;
+      if (tr < 0) { L[i] = 0; Rr[i] = 0; continue; }
       if (t > S.DUR + 0.3) { L[i] = 0; Rr[i] = 0; this.dead = true; continue; }
       while (this.ei < this.events.length && this.events[this.ei].t <= t) this.voices.push(this.events[this.ei++].fn());
       bus.l = 0; bus.r = 0; bus.s = 0;

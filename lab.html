@@ -9,12 +9,13 @@ const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? DUR + 0.3);
 const FMIN = +(params.get('fmin') ?? 30), FMAX = +(params.get('fmax') ?? 18000);
 const W = +(params.get('w') ?? 1800), H = +(params.get('h') ?? 900);
 const sr = 48000;
+const SPEED = +(params.get('speed') ?? 1); // note: the spectrogram x-axis is in real seconds
 
 async function render() {
-  const len = Math.ceil((DUR + 0.4) * sr);
+  const len = Math.ceil((DUR + 0.4) / SPEED * sr);
   const ctx = new OfflineAudioContext(2, len, sr);
   await ctx.audioWorklet.addModule('worklet.js');
-  const node = new AudioWorkletNode(ctx, 'comma', { outputChannelCount: [2], processorOptions: { autostart: true, at: 0, offset: 0 } });
+  const node = new AudioWorkletNode(ctx, 'comma', { outputChannelCount: [2], processorOptions: { autostart: true, at: 0, offset: 0, speed: SPEED } });
   node.connect(ctx.destination);
   const t = performance.now();
   const buf = await ctx.startRendering();
