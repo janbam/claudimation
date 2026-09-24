@@ -1,6 +1,6 @@
 # COMMA — a treatise in five axioms
 
-A ~45-second claudimation (3.6 s of title, then 41.8 s of piece). Canvas 2D + Web Audio, one AudioWorklet synthesizing everything sample by sample
+A ~60-second claudimation by Opus 5.5, with janbam the human: 3.6 s of title, 46.2 s of piece, then 9 s of room ringing out over the last frame. Canvas 2D + Web Audio, one AudioWorklet synthesizing everything sample by sample
 from a shared deterministic score (`score.js`), so the visuals are computed from the same numbers you hear.
 
 ```
@@ -10,13 +10,15 @@ open http://localhost:8765/    # speed slider · click · space = replay · esc 
 
 | axiom | time | idea |
 |---|---|---|
-| I   | 0–4.5   | **every tone is a gravity well** — 64 Hz (2⁶, chosen by a computer) grows its harmonic series on a rainbow pitch helix (angle = pitch class = hue, C = Claude orange). Every partial pings as it lands; 7, 11, 13 show their cents off 12-TET. |
-| II  | 4.5–12.6 | **stack the fifths until they lie** — modal plucked strings (stiff inharmonic partials, pluck-position comb, frequency-dependent decay). Seven fifths make Lydian. The twelfth is B♯: the world ducks, C and B♯ call and answer, then sound together and wobble at 3.49 Hz while the camera dives into the 23.46¢ gap. Then the tear. |
-| III | 12.6–25.3 | **twelve is a rounding error** — *the bar has as many steps as the octave has notes*. 12-EDO in 12/16 (3 straight bars), 19 in 19/16, 31 in 31/32, 53 in 53/64, Bohlen–Pierce 13ED3 in 13/16, π-EDO in π/4. Each tuning gets ×0.78 the time of the last (3.6 → 1.05 s) while the groove loosens: rubato, jitter, ghost notes, ratchets, off-grid kicks. |
-| IV  | 25.3–32.8 | **rhythm is harmony, slowed down** — a Cowell rhythmicon: partial k pulses k times per cycle, accelerating 60 → 3840 bpm until the polyrhythm *is* the harmonic chord on 64 Hz. |
-| V   | 32.8–41.8 | **the undertone is the overtone in a mirror** — 64·k glides to 1024/k; every voice crosses 1/1 (256 Hz) at the same instant. Everyone lands 23.46¢ sharp, wobbles, sighs to 1/1. Then: 256 Hz is the 12th harmonic of 21.33 Hz, and the helix that's been there all along gets *wound*: its angle becomes the phase of a 21.33 Hz period, every point slides to the waveform's value there (a Klangzylinder). The home octave becomes the outline, the others become echo windings; as the voices glide onto 28 phase-locked partials, the winding blooms into the twelve-rayed spark. `sparkW` in `score.js` is the same sum the worklet plays. |
+| I   | 0–5.0 | **every tone is a gravity well** — 64 Hz (2⁶, chosen by a computer) grows its harmonic series on a rainbow pitch helix (angle = pitch class = hue, C = Claude orange). Every partial pings as it lands; 7, 11, 13 show their cents off 12-TET. |
+| II  | 5.0–14.0 | **stack the fifths until they lie** — modal plucked strings. Seven fifths make Lydian. The twelfth is B♯: the world ducks, C and B♯ call and answer, then wobble at 3.49 Hz while the camera dives into the 23.46¢ gap. II plays into its own room, which grows during the wobble; at the tear only the dry sound goes — B♯ against C keeps standing in the room, the rough beating smoothing into one steady tone, and dies away under the first bars of III (whose own room starts empty). |
+| III | 14.0–24.8 | **twelve is a rounding error** — *the bar has as many steps as the octave has notes*; just beat and melody. 12-EDO in 12/16: one bar per second, 12 steps/s (180 bpm), three straight bars. Then 19/16, 31/32, 53/64, Bohlen–Pierce 13/16, each tuning ×0.78 as long as the last, the groove loosening as it goes. The π/4 bar is one second again: π-EDO steps are 1200/π = 382¢, so its four notes climb to 1146¢ — a leading tone 54¢ under the octave. Step π, the octave, doesn't fit in the bar: it lands on the downbeat of IV, with a 909 sub drop 64 → 16 Hz. |
+| IV  | 24.8–33.1 | **rhythm is harmony, slowed down** — a Cowell rhythmicon: partial k pulses k times per cycle, 60 → 3840 bpm (1 cycle per second at first, like the bars of III), until the polyrhythm *is* the harmonic chord on 64 Hz. |
+| V   | 33.1–46.2 (+9 s) | **the undertone is the overtone in a mirror** — 64·k glides to 1024/k; every voice crosses 1/1 at the same instant, lands 23.46¢ sharp, wobbles, sighs to 1/1. Then the helix gets *wound*: its angle becomes the phase of one period of 21.33 Hz (1/1 is its 12th harmonic), every point slides to the waveform's value there — a Klangzylinder — and blooms into the twelve-rayed spark as the voices lock onto 28 partials. The layers melt into one flat orange shape, which fades over twelve comma-beats (12 / 3.49 Hz = 3.44 s) while the sound pours into a growing room (RT60 ≈ 2 → 9 s). The picture stands still; the room rings on for 9 s. |
 
-**Speed.** The slider on the start screen (or `?speed=0.9`) changes tempo, never pitch. Things that are real frequencies stay real: the comma still beats at 3.49 Hz, and the rhythmicon still arrives at exactly 64 Hz (its phase is rescaled, not its rate).
+(times are real seconds at speed 1.0, after the title.)
+
+**Speed.** The slider on the start screen (or `?speed=1.1`) changes tempo, never pitch. 1.0 is score time × 0.9 (`BASE_SPEED`) — 0.9 was the right tempo, so that's what 1.0 means now. Things that are real frequencies stay real: the comma still beats at 3.49 Hz, and the rhythmicon still arrives at exactly 64 Hz (its phase is rescaled, not its rate).
 
 **The room.** One 8-line Hadamard FDN for everything: three static input diffusers; Lexicon-style *wander* (each delay
 length drifts on its own smooth random walk, ±0.17 ms, so the modes never sit still — ≤ 0.7¢ of drift, only in the tail,
