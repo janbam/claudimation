@@ -8,10 +8,14 @@ export const COMMA = 531441 / 524288; // (3/2)^12 / 2^19  ≈ 23.46 cents of hea
 export const COMMA_CENTS = 1200 * Math.log2(COMMA);
 export const BEAT_HZ = HOME * COMMA - HOME; // 3.49 wobbles per second
 
-// III is 12.7 s: six tunings, each segment shorter than the last (≈ ×0.8), the groove getting stranger
-const III_D = [3.6, 2.8, 2.2, 1.7, 1.35, 1.05]; // ×0.78 each
+// III: six tunings, each segment shorter than the last (≈ ×0.8), the groove getting stranger
+// real time = score time / BASE_SPEED. (0.9 was the right tempo, so 0.9 is now what "1.0" means.)
+export const BASE_SPEED = 0.9;
+// 12-EDO: one 12/16 bar per real second (12 steps/s, 180 bpm) — and the π/4 bar is one second too.
+// in between, each tuning gets ×0.78 of the time of the last.
+const III_D = [3, 2.33, 1.83, 1.44, 1.17, 1.0].map((d) => d * BASE_SPEED);
 const III_LEN = III_D.reduce((a, b) => a + b);
-export const T = { I: 0, II: 4.5, III: 12.6, IV: 12.6 + III_LEN, V: 12.6 + III_LEN + 7.5, END: 12.6 + III_LEN + 7.5 + 9.0 };
+export const T = { I: 0, II: 4.5, III: 12.6, IV: 12.6 + III_LEN, V: 12.6 + III_LEN + 7.5, END: 12.6 + III_LEN + 7.5 + 8.5 + 12 / BEAT_HZ * BASE_SPEED + 0.2 }; // the fade lasts twelve comma-beats
 export const DUR = T.END;
 
 const TAU_ = Math.PI * 2;
@@ -127,6 +131,9 @@ export const III_EVENTS = (() => {
     const sRot = straight ? 0 : Math.floor(N / 2) + (s.i % 2 ? 1 : -1);
     const hat = straight ? Array(12).fill(1) : euclid(Math.min(24, Math.max(5, Math.round(N * lerp(0.75, 0.6, c)))), N);
     const mel = straight ? [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1] : euclid(Math.min(28, Math.max(7, Math.round(N * 0.7))), N);
+    if (s.cont) { // an accelerating, swelling snare roll pulls into IV
+      for (let j = 0; j < 18; j++) drums.push({ t: s.t0 + s.d * Math.sqrt(j / 18), type: 'snare', vel: 0.22 + 0.6 * (j / 17) ** 1.5 });
+    }
     for (const st of steps) {
       const { t, i } = st;
       const tn = tuningAt(t + 1e-6);
@@ -147,7 +154,11 @@ export const III_EVENTS = (() => {
         for (let r = 0; r < rr; r++) drums.push({ t: t + r * stepDur / rr, type: 'snare', vel: 0.3 + 0.4 * rnd() });
       }
       // melody: a random walk in the current tuning
-      if (mel[i % mel.length] || s.cont) {
+      if (s.cont) {
+        // π-EDO: step = 1200/π = 382¢. steps 0,1,2,3 climb to 1146¢, 54¢ under the octave: a leading tone.
+        // step π (the octave) doesn't fit in the bar. it lands on the downbeat of IV.
+        notes.push({ t, freq: 256 * Math.pow(2, i / Math.PI), step: i, n: Math.PI, P: 2, seg: s.i, vel: 0.6 + 0.13 * i, pan: (i - 1.5) * 0.3 });
+      } else if (mel[i % mel.length]) {
         const n = tn.n, P = tn.P;
         if (Math.round(n) !== prevN) { walk = Math.round(walk / prevN * n); prevN = Math.round(n); }
         const fifth = Math.max(1, stepsFor(n, P, P === 3 ? 7 / 3 : 3 / 2));
@@ -194,7 +205,9 @@ export const V_SETTLE = [T.V + 4.1, T.V + 4.8];    // the sigh down to 1/1
 export const V_CENTER = [T.V + 4.3, T.V + 5.0];    // camera: home becomes the centre of the world
 export const V_WIND = [T.V + 4.8, T.V + 5.3];      // wind the sound around its own period
 export const V_BLOOM = [T.V + 5.3, T.V + 7.3];     // partials arrive; the waveform becomes a spark
-export const V_FADE = [T.V + 7.9, T.END - 0.15];
+export const V_CLEAN = [T.V + 7.8, T.V + 8.6];      // the layers melt into one flat orange shape
+export const V_FADE = [T.V + 8.5, T.V + 8.5 + 12 / BEAT_HZ * BASE_SPEED]; // 12 wobbles of the comma: 3.44 s
+export const vFade = (t) => Math.pow(1 - ramp(t, V_FADE[0], V_FADE[1]), 1.7); // closer to an even fade in dB
 
 // THE SPARK. home (256 Hz) is the 12th harmonic of 21.33 Hz, home's 12th undertone.
 // wound around one period of 21.33 Hz, a sum of these partials draws a 12-rayed sun:
@@ -237,11 +250,10 @@ export function mirrorAmp(k, t) {
   // twelve voices on one frequency would interfere at random; they dissolve into voice 1, which carries home
   const base = k === 1 ? lerp(0.19, 0.3, settle) : (0.19 / Math.pow(k, 0.55)) * (1 - settle);
   const b = smooth(ramp(t, p.t - 0.25, p.t + 0.6));
-  return a * lerp(base, p.amp * SPARK_GAIN * 1.6, b) * (1 - ramp(t, V_FADE[0], V_FADE[1]));
+  return a * lerp(base, p.amp * SPARK_GAIN * 1.6, b) * vFade(t);
 }
-export const sparkAmp = (p, t) => p.amp * SPARK_GAIN * 1.6 * sparkIn(p, t) * (1 - ramp(t, V_FADE[0], V_FADE[1]));
+export const sparkAmp = (p, t) => p.amp * SPARK_GAIN * 1.6 * sparkIn(p, t) * vFade(t);
 // the shape itself, for the visuals: winding j of the current sound, θ in radians
-export const vFade = (t) => 1 - ramp(t, V_FADE[0], V_FADE[1]);
 export function sparkW(th, t, j = 0) {
   let w = 0;
   for (let i = 0; i < SPARK.length; i++) {

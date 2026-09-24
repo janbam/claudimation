@@ -3,13 +3,13 @@
 <style>body{background:#111;color:#ddd;font:12px monospace;margin:0}canvas{display:block}#s{padding:6px}</style>
 </head><body><div id="s">rendering…</div><canvas id="c"></canvas>
 <script type="module">
-import { DUR, F_UNDER } from './score.js';
+import { DUR, F_UNDER, BASE_SPEED } from './score.js';
 const params = new URLSearchParams(location.search);
-const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? DUR + 0.3);
+const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? (DUR + 0.3) / BASE_SPEED);
 const FMIN = +(params.get('fmin') ?? 30), FMAX = +(params.get('fmax') ?? 18000);
 const W = +(params.get('w') ?? 1800), H = +(params.get('h') ?? 900);
 const sr = 48000;
-const SPEED = +(params.get('speed') ?? 1); // note: the spectrogram x-axis is in real seconds
+const SPEED = +(params.get('speed') ?? 1) * BASE_SPEED; // note: the spectrogram x-axis is in real seconds
 
 async function render() {
   const len = Math.ceil((DUR + 0.4) / SPEED * sr);
@@ -44,7 +44,7 @@ const L = buf.getChannelData(0), R = buf.getChannelData(1);
 const mono = new Float32Array(L.length); for (let i = 0; i < L.length; i++) mono[i] = 0.5 * (L[i] + R[i]);
 // stats
 let peak = 0, nan = 0; for (let i = 0; i < L.length; i++) { const a = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (a > peak) peak = a; if (!isFinite(L[i])) nan++; }
-const rms = []; for (let s = 0; s < DUR + 0.4; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
+const rms = []; for (let s = 0; s < (DUR + 0.4) / SPEED - 0.5; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
 window.stats = { renderMs: Math.round(window.renderMs), peak: peak.toFixed(3), nan, rmsPerHalfSec: rms.join(' ') };
 document.getElementById('s').textContent = JSON.stringify(window.stats);
 

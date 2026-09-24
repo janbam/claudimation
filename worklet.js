@@ -103,9 +103,10 @@ class Kick {
     const age = t - this.t0; if (age < 0) return true; if (age > this.decay * 6) return false;
     const f = this.f1 + 120 * Math.exp(-age / 0.03);
     this.ph += f * this.inv;
-    let y = Math.sin(TAU * this.ph) * Math.exp(-age / this.decay);
+    const e = Math.exp(-age / this.decay); // envelope after the drive: punch, then a tail that actually goes away
+    let y = Math.sin(TAU * this.ph) * Math.min(1, e * 1.6);
     y += (this.rnd() * 2 - 1) * Math.exp(-age / 0.002) * 0.4;
-    y = Math.tanh(y * 1.6) * this.amp;
+    y = Math.tanh(y * 1.6) * e * this.amp;
     bus.l += y; bus.r += y; bus.s += y * 0.06;
     return true;
   }
@@ -114,9 +115,11 @@ class Kick {
 class Bass808 { // tuned to the tonic of whatever tuning we're in
   constructor(t0, f, amp, decay) { this.t0 = t0; this.f = f; this.amp = amp; this.decay = decay; this.ph = 0; this.inv = 1 / sampleRate; }
   run(t, bus) {
-    const age = t - this.t0; if (age < 0) return true; if (age > this.decay * 5) return false;
+    const age = t - this.t0; if (age < 0) return true; if (age > this.decay * 6) return false;
     this.ph += this.f * (1 + 1.2 * Math.exp(-age / 0.03)) * this.inv;
-    const y = Math.tanh(2.2 * Math.sin(TAU * this.ph) * Math.exp(-age / this.decay)) * this.amp * Math.min(1, age / 0.003);
+    // drive only while it's loud; the envelope comes *after* the tanh, so the tail really decays (no drone)
+    const e = Math.exp(-age / this.decay);
+    const y = Math.tanh(2.2 * Math.sin(TAU * this.ph) * Math.min(1, e * 1.5)) * e * this.amp * Math.min(1, age / 0.003);
     bus.l += y; bus.r += y; bus.s += y * 0.05;
     return true;
   }
@@ -165,7 +168,7 @@ class FDN {
     const base = [1031, 1327, 1523, 1871, 2053, 2311, 2677, 2963];
     this.len = base.map((l) => Math.round(l * sr / 48000));
     this.buf = this.len.map((l) => new Float32Array(l)); this.idx = new Int32Array(8);
-    this.lp = new Float32Array(8); this.o = new Float32Array(8); this.fb = 0.86; this.damp = 0.3;
+    this.lp = new Float32Array(8); this.o = new Float32Array(8); this.fb = 0.86; this.fbMul = 1; this.damp = 0.3;
     this.pre = new Float32Array(Math.round(sr * 0.021)); this.pi = 0; this.l = 0; this.r = 0;
   }
   run(x) {
@@ -173,7 +176,7 @@ class FDN {
     const o = this.o;
     for (let i = 0; i < 8; i++) { const v = this.buf[i][this.idx[i]]; this.lp[i] += this.damp * (v - this.lp[i]); o[i] = this.lp[i]; }
     for (let h = 1; h < 8; h <<= 1) for (let i = 0; i < 8; i += h << 1) for (let j = i; j < i + h; j++) { const a = o[j], b = o[j + h]; o[j] = a + b; o[j + h] = a - b; }
-    const sc = this.fb / Math.sqrt(8);
+    const sc = this.fb * this.fbMul / Math.sqrt(8);
     let l = 0, r = 0;
     for (let i = 0; i < 8; i++) {
       const v = this.lp[i];
@@ -203,11 +206,11 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.rPL = new Float64Array(K + 1); this.rPR = new Float64Array(K + 1);
     for (let k = 1; k <= K; k++) { const p = (k % 2 ? 1 : -1) * Math.min(0.85, k / 10); this.rPL[k] = panL(p); this.rPR[k] = panR(p); }
     this.port.onmessage = (e) => {
-      if (e.data.type === 'start') { this.startAt = e.data.at; this.offset = e.data.offset || 0; this.speed = e.data.speed || 1; this.build(this.offset); this.running = true; }
+      if (e.data.type === 'start') { this.startAt = e.data.at; this.offset = e.data.offset || 0; this.speed = e.data.speed || S.BASE_SPEED; this.build(this.offset); this.running = true; }
       if (e.data.type === 'stop') { this.dead = true; this.voices = []; this.events = []; }
     };
     const po = options && options.processorOptions;
-    if (po && po.autostart) { this.startAt = po.at || 0; this.offset = po.offset || 0; this.speed = po.speed || 1; this.build(this.offset); this.running = true; }
+    if (po && po.autostart) { this.startAt = po.at || 0; this.offset = po.offset || 0; this.speed = po.speed || S.BASE_SPEED; this.build(this.offset); this.running = true; }
   }
 
   build(t0) {
@@ -267,20 +270,28 @@ class CommaProcessor extends AudioWorkletProcessor {
     }
     for (const nt of S.III_NOTES) {
       const seg = S.III_SEGS[nt.seg];
-      const ratio = seg.P === 3 ? 2 : seg.cont ? Math.PI : [1, 1, 2, 1][nt.seg] ?? 1;
-      const idx = seg.P === 3 ? 2.4 : seg.cont ? 3.2 : [1.6, 2.0, 1.2, 2.4][nt.seg] ?? 1.6;
-      at(nt.t, () => new Bell(nt.t, nt.freq, ratio, idx, 0.12 * nt.vel, seg.n > 40 ? 0.14 : 0.22, nt.pan * 0.85));
+      const ratio = seg.P === 3 ? 2 : seg.cont ? 1 : [1, 1, 2, 1][nt.seg] ?? 1;
+      const idx = seg.P === 3 ? 2.4 : seg.cont ? 1.4 : [1.6, 2.0, 1.2, 2.4][nt.seg] ?? 1.6;
+      at(nt.t, () => new Bell(nt.t, nt.freq, ratio, idx, (seg.cont ? 0.16 : 0.12) * nt.vel, seg.cont ? 0.35 : seg.n > 40 ? 0.14 : 0.22, nt.pan * 0.85));
     }
     for (const d of S.III_DRUMS) {
       const t = d.t;
-      if (d.type === 'kick') at(t, () => new Kick(t, 0.5 * d.vel, 46, R, 0.16));
-      else if (d.type === 'bass') at(t, () => new Bass808(t, d.f, 0.28, 0.2));
+      if (d.type === 'kick') at(t, () => new Kick(t, 0.55 * d.vel, 46, R, 0.1));
+      else if (d.type === 'bass') at(t, () => new Bass808(t, d.f, 0.3, 0.11));
       else if (d.type === 'snare') at(t, () => new Noise({ t0: t, dur: 0.3, rnd: R, fc: () => 2400, q: 0.6, mode: 'bp', pan: 0.1, send: 0.35,
         amp: (a) => 0.42 * d.vel * Math.exp(-a / 0.07),
         tone: { f: (a) => 175 + 60 * Math.exp(-a / 0.02), a: (a) => 0.22 * d.vel * Math.exp(-a / 0.05) } }));
       else at(t, () => new Noise({ t0: t, dur: d.open ? 0.4 : 0.07, rnd: R, fc: () => 8500, q: 0.7, mode: 'hp', pan: (R() - 0.5) * 0.8, send: 0.1,
         amp: (a) => 0.12 * d.vel * Math.exp(-a / (d.open ? 0.12 : 0.014)) }));
     }
+
+    // ── III → IV: the landing. 64 Hz falls two octaves in a blink; the missing bit of π arrives.
+    { const t4 = S.T.IV;
+      this.voices.push(new Sine({ start: t4 - 0.005, f: 64, send: 0.05, end: t4 + 1.4, harm: [1, 0.28, 0.08],
+        ff: (t) => 64 * Math.pow(0.25, S.smooth(S.clamp((t - t4) / 0.32, 0, 1))),
+        amp: (t) => 0.62 * S.ramp(t, t4 - 0.004, t4 + 0.004) * Math.exp(-Math.max(0, t - t4) / 0.42) }));
+      at(t4, () => new Kick(t4, 0.55, 50, R, 0.3));
+      at(t4, () => new Noise({ t0: t4, dur: 1.0, rnd: R, fc: () => 7000, q: 0.5, mode: 'hp', send: 0.7, amp: (a) => 0.07 * Math.exp(-a / 0.25) })); }
 
     // ── IV → V: whoosh into the mirror
     at(S.T.V - 1.6, () => new Noise({ t0: S.T.V - 1.6, dur: 1.62, rnd: R, fc: (a) => 250 * Math.pow(30, a / 1.6), q: 2.5, mode: 'bp', send: 0.4, amp: (a) => 0.16 * Math.pow(a / 1.6, 2.2) }));
@@ -364,6 +375,7 @@ class CommaProcessor extends AudioWorkletProcessor {
       const vs = this.voices;
       for (let v = 0; v < vs.length; v++) { if (!vs[v].run(t, bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
       this.rhythmicon(t, bus);
+      this.fdn.fbMul = t > S.TEAR_T && t < S.TEAR_T + 0.1 ? 0.2 : 1; // the tear cuts the room too
       this.fdn.run(bus.s); const rl = this.fdn.l, rr = this.fdn.r;
       const l = bus.l + rl, r = bus.r + rr;
       const yl = l - this.xl + 0.9995 * this.hpL; this.xl = l; this.hpL = yl;

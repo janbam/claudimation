@@ -26,7 +26,7 @@ const cv = document.getElementById('c');
 const g = cv.getContext('2d');
 let W = 0, H = 0, DPR = 1, U = 0, CX = 0, CY = 0;
 const params = new URLSearchParams(location.search);
-let SPEED = +(params.get('speed') || 1); // tempo factor. pitches never change, only when things happen
+let SPEED = (+(params.get('speed') || 1)) * S.BASE_SPEED; // tempo factor (user 1.0 = 0.9 internally). pitches never change
 const beatPh = (t, t0) => TAU * S.BEAT_HZ * (t - t0) / SPEED; // 3.49 Hz is a real frequency difference
 const rhyPh = (t) => S.rhyPhase(t) / SPEED; // pulse rates are real Hz (64 Hz = the tonic)
 let FIXED = null; // render mode: exact output size, ss = supersampling
@@ -129,6 +129,8 @@ function camera(t) {
   const ke = kickEnv(t);
   if (t > S.T.III && t < S.T.V + 1) { zoom *= 1 + 0.035 * ke; shake += 5 * ke; }
   if (t > S.T.III && t < S.T.IV) shake += 2.5 * snareEnv(t);
+  // III → IV: the landing
+  if (t > S.T.IV) { const e = Math.exp(-(t - S.T.IV) / 0.18); shake += 14 * e; zoom *= 1 + 0.05 * e; }
   // IV: lean in towards the drop
   const lean = ramp(t, S.T.V - 1.8, S.T.V) * (1 - ramp(t, S.T.V, S.T.V + 0.4));
   zoom *= 1 + 0.12 * lean; rot += 0.06 * lean;
@@ -151,6 +153,7 @@ function background(t) {
   if (sec === 2) { const tn = S.tuningAt(t); hue = 320 + tn.i * 47; amt = 0.45 + 0.5 * kickEnv(t); }
   if (sec === 3) { amt = 0.4 + 0.5 * ramp(t, S.T.IV + 3, S.T.V); hue = lerp(285, 330, ramp(t, S.T.IV, S.T.V)); }
   if (t > S.V_SETTLE[0]) { hue = lerp(220, 18, ramp(t, S.V_SETTLE[0], S.V_BLOOM[0])); }
+  if (t > S.V_FADE[0]) amt *= 0.2 + 0.8 * S.vFade(t); // the room goes dark with the logo
   const gr = g.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * 0.75);
   gr.addColorStop(0, rgba(hsl(hue, 0.7, lum), amt)); gr.addColorStop(1, rgba(INK, 0));
   g.fillStyle = gr; g.fillRect(0, 0, W, H);
@@ -164,6 +167,7 @@ function background(t) {
     const n = S.III_NOTES.filter((x) => x.t <= t).at(-1);
     if (n) { g.fillStyle = rgba(pcol(n.freq, 1, 0.5), 0.16 * kickEnv(t)); g.fillRect(0, 0, W, H); }
   }
+  if (t > S.T.IV && t < S.T.IV + 0.5) { g.fillStyle = rgba(CLAUDE, 0.35 * Math.exp(-(t - S.T.IV) / 0.1)); g.fillRect(0, 0, W, H); }
   // IV → V: the drop
   const imp = t - S.T.V;
   if (imp > 0 && imp < 0.6) { g.fillStyle = rgba([255, 255, 255], 0.85 * Math.exp(-imp / 0.12)); g.fillRect(0, 0, W, H); }
@@ -393,7 +397,7 @@ function windingHelix(t, alpha, m, G) {
 }
 function drawV(t) {
   if (t < S.T.V - 0.3) return;
-  const m = morphAmt(t), G = sparkGeom(t), end = 1 - ramp(t, S.DUR - 0.9, S.DUR - 0.1);
+  const m = morphAmt(t), G = sparkGeom(t), end = S.vFade(t), clean = ramp(t, S.V_CLEAN[0], S.V_CLEAN[1]);
   const fa = ramp(t, S.T.V - 0.1, S.T.V + 0.2);
   const fm = fa * (1 - ramp(t, S.V_WIND[0] - 0.2, S.V_WIND[1])); // mirror furniture yields to the winding
   const mir = smooth(ramp(t, S.T.V + 0.05, S.V_MIRROR_END));
@@ -403,8 +407,8 @@ function drawV(t) {
     const ia = t - S.T.V; if (ia > 0 && ia < 1.2) { burst(CX, CY, ia, 90, [MAGENTA, CYAN, GOLD, CLAUDE, [150, 255, 120]], 777, 700, 1.2, 3); g.strokeStyle = rgba(CREAM, 1 - ia / 1.2); g.lineWidth = 4 * (1 - ia / 1.2); g.beginPath(); g.arc(CX, CY, ia * U * 1.6, 0, TAU); g.stroke(); }
   }
   // the helix: present all along, now becoming the thing itself
-  windingHelix(t, fa * lerp(0.22, 0.8, m) * end, m, G);
-  drawSparkBody(t, m, G, end);
+  windingHelix(t, fa * lerp(0.22, 0.8, m) * (1 - clean), m, G);
+  drawSparkBody(t, m, G, end, clean);
   // C reference during the wobble
   const cref = ramp(t, S.V_CONVERGE[1] - 0.3, S.V_WOBBLE[0]) * (1 - ramp(t, S.V_SETTLE[0], S.V_SETTLE[1]));
   if (cref > 0) { const [x, y] = helix(S.HOME); dot(x, y, 6, CLAUDE, cref * fa); }
@@ -426,7 +430,7 @@ function drawV(t) {
   }
 }
 // the body of the spark: the home winding, filled; a core grows out of the helix centre
-function drawSparkBody(t, m, G, end) {
+function drawSparkBody(t, m, G, end, clean) {
   const a = smooth(ramp(m, 0.45, 1)) * end; if (a <= 0.003) return;
   const N = 540, pts = [];
   for (let i = 0; i <= N; i++) { const oct = 3 + i / N, r = morphR(oct, t, m, G, false), ang = TAU * (i / N) - Math.PI / 2; pts.push([CX + r * Math.cos(ang), CY + r * Math.sin(ang)]); }
@@ -434,20 +438,20 @@ function drawSparkBody(t, m, G, end) {
   g.save(); g.translate(CX, CY); g.scale(breath, breath); g.translate(-CX, -CY);
   g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(...p) : g.moveTo(...p))); g.closePath();
   const rg = g.createRadialGradient(CX, CY, 0, CX, CY, G.R0 + G.A);
-  rg.addColorStop(0, rgba([240, 150, 110], a)); rg.addColorStop(0.5, rgba(CLAUDE, a)); rg.addColorStop(1, rgba([200, 95, 65], a));
-  g.fillStyle = rg; g.fill();
-  g.shadowColor = rgba(CLAUDE, 0.8 * a); g.shadowBlur = 40; g.strokeStyle = rgba([255, 190, 150], 0.6 * a); g.lineWidth = 1.5; g.stroke(); g.shadowBlur = 0;
+  rg.addColorStop(0, rgba(mix([240, 150, 110], CLAUDE, clean), a)); rg.addColorStop(0.5, rgba(CLAUDE, a)); rg.addColorStop(1, rgba(mix([200, 95, 65], CLAUDE, clean), a));
+  g.shadowColor = rgba(CLAUDE, 0.8 * a * (1 - 0.5 * clean)); g.shadowBlur = 40; g.fillStyle = rg; g.fill(); g.shadowBlur = 0;
+  g.strokeStyle = rgba([255, 190, 150], 0.6 * a * (1 - clean)); g.lineWidth = 1.5; g.stroke();
   // the core: a round window with the helix inside it, turning slowly
-  const ca = smooth(ramp(m, 0.6, 1));
-  const cr = Math.max(4, (G.R0 - G.A * 0.3) * 0.82) * ca;
-  if (cr > 4) {
+  const ca = smooth(ramp(m, 0.6, 1)) * (1 - clean); // the core and its helix melt into the flat orange
+  const cr = Math.max(4, (G.R0 - G.A * 0.3) * 0.82) * smooth(ramp(m, 0.6, 1));
+  if (cr > 4 && ca > 0.003) {
     const cg = g.createRadialGradient(CX, CY - cr * 0.3, 0, CX, CY, cr);
-    cg.addColorStop(0, rgba([255, 214, 180], a)); cg.addColorStop(1, rgba([232, 128, 92], a));
+    cg.addColorStop(0, rgba([255, 214, 180], a * ca)); cg.addColorStop(1, rgba([232, 128, 92], a * ca));
     g.fillStyle = cg; g.beginPath(); g.arc(CX, CY, cr, 0, TAU); g.fill();
     g.save(); g.beginPath(); g.arc(CX, CY, cr * 0.92, 0, TAU); g.clip();
     const rot = (t - S.V_WIND[0]) * 0.5; g.lineWidth = 1.6; let prev = null;
     for (let i = 0; i <= 220; i++) { const u = i / 220, ang = TAU * 3.2 * u + rot, rr = cr * 0.9 * u, p = [CX + rr * Math.cos(ang), CY + rr * Math.sin(ang)];
-      if (prev) { g.strokeStyle = rgba(hsl(15 + 360 * 3.2 * u, 0.85, 0.42), a * 0.85); g.beginPath(); g.moveTo(...prev); g.lineTo(...p); g.stroke(); } prev = p; }
+      if (prev) { g.strokeStyle = rgba(hsl(15 + 360 * 3.2 * u, 0.85, 0.42), a * 0.85 * ca); g.beginPath(); g.moveTo(...prev); g.lineTo(...p); g.stroke(); } prev = p; }
     g.restore();
   }
   g.restore();
@@ -466,7 +470,7 @@ function drawVOverlay(t) {
 // COMMA, once more — and now it has colours
 function endTitle(t) {
   const a0 = S.V_BLOOM[1] - 0.3; if (t < a0) return;
-  const out = 1 - ramp(t, S.DUR - 0.9, S.DUR - 0.1);
+  const out = S.vFade(t);
   const size = Math.min(54, W * 0.045), y = H * 0.885;
   g.font = `700 ${size}px ${SERIF}`;
   const gap = size * 0.55, ws = [...'COMMA'].map((c) => g.measureText(c).width), tw = ws.reduce((a, b) => a + b) + gap * 4;
@@ -478,7 +482,7 @@ function endTitle(t) {
   });
 }
 
-// ───────────────────────── chrome: title, axiom slams, timeline
+// ───────────────────────── chrome: axiom slams, readouts
 function axiomTitle(t) {
   const sec = S.sectionAt(t); if (t > S.V_SETTLE[0]) return;
   const t0 = [0.9, S.T.II, S.T.III, S.T.IV, S.T.V][sec];
@@ -507,7 +511,9 @@ function drawTitle(tt) {
   const ls = size * (0.32 + 0.04 * life); // the letters drift apart, slowly: 23.46¢ at a time
   text('COMMA', CX + ls / 2, y, { font: SERIF, size, align: 'center', base: 'middle', col: CREAM, a, weight: 400, ls });
   text('a treatise in five axioms', CX, y + size * 0.78, { font: SERIF, italic: true, size: Math.max(16, size * 0.2), align: 'center', a: a * ramp(life, 0.5, 1.2) * 0.9, col: CREAM });
-  text('a claudimation by Opus 5.5', CX, y + size * 0.78 + Math.max(34, size * 0.4), { font: MONO, size: Math.max(11, size * 0.11), align: 'center', a: a * ramp(life, 0.9, 1.6) * 0.55, col: CREAM, ls: 3 });
+  const cy = y + size * 0.78 + Math.max(34, size * 0.4), cs = Math.max(11, size * 0.11);
+  text('a claudimation by Opus 5.5', CX, cy, { font: MONO, size: cs, align: 'center', a: a * ramp(life, 0.9, 1.6) * 0.55, col: CREAM, ls: 3 });
+  text('with janbam the human', CX, cy + cs * 1.9, { font: MONO, size: cs, align: 'center', a: a * ramp(life, 1.1, 1.8) * 0.55, col: CREAM, ls: 3 });
 }
 function chrome(t) {
   const x = Math.max(28, W * 0.035), y = Math.max(34, H * 0.06);
@@ -524,14 +530,6 @@ function chrome(t) {
   if (sec === 3) { L.push('pulse ' + S.rhyRate(t).toFixed(2) + ' Hz'); L.push('1 : 2 : 3 : … : 12'); }
   if (sec === 4 && t < S.V_WIND[0]) { L.push('overtone ↔ undertone'); L.push('64·k  ↔  1024/k'); L.push('mirror axis: 256 Hz'); }
   L.forEach((l, i) => text(l, rx, y + i * 16 - 4, { size: 11, align: 'right', a: (i ? 0.55 : 0.9) * ramp(t, 0.6, 1.2) }));
-  // timeline, coloured by axiom
-  const tlw = Math.min(W * 0.26, 300), tx = rx - tlw, ty = H - Math.max(40, H * 0.07) + 8;
-  const secs = [S.T.I, S.T.II, S.T.III, S.T.IV, S.T.V, S.DUR], hues = [265, 195, 320, 285, 220];
-  for (let i = 0; i < 5; i++) { const a0 = tx + tlw * secs[i] / S.DUR, a1 = tx + tlw * secs[i + 1] / S.DUR;
-    g.fillStyle = rgba(hsl(hues[i], 0.8, 0.6), 0.25 * hide); g.fillRect(a0, ty, a1 - a0 - 2, 2);
-    const p = clamp((t - secs[i]) / (secs[i + 1] - secs[i]), 0, 1); g.fillStyle = rgba(hsl(hues[i], 0.95, 0.65), 0.95 * hide); g.fillRect(a0, ty, (a1 - a0 - 2) * p, 2);
-    text(S.AXIOMS[i][0], a0, ty - 6, { font: SERIF, size: 10, a: (i === sec ? 1 : 0.35) * hide, col: hsl(hues[i], 0.9, 0.7), weight: 700 }); }
-  text(t.toFixed(2) + ' s', rx, ty + 17, { size: 10, align: 'right', a: 0.4 * hide });
 }
 
 // ───────────────────────── glitch (the tear)
@@ -596,7 +594,7 @@ function frameAt(tr, off = OFFSET) {
   return t;
 }
 window.frameAt = frameAt;
-function setSpeed(v) { SPEED = clamp(+v || 1, 0.25, 4); initKicks(); }
+function setSpeed(v) { SPEED = clamp(+v || 1, 0.25, 4) * S.BASE_SPEED; initKicks(); }
 
 // ───────────────────────── live playback
 const gate = document.getElementById('gate');
@@ -689,8 +687,8 @@ if (params.has('render')) {
 } else {
   const sp = document.getElementById('speed'), spv = document.getElementById('speedv');
   if (sp) {
-    sp.value = SPEED;
-    const upd = () => { setSpeed(sp.value); spv.textContent = SPEED.toFixed(2) + '×  ·  ' + totalReal(0).toFixed(1) + ' s'; };
+    sp.value = SPEED / S.BASE_SPEED;
+    const upd = () => { setSpeed(sp.value); spv.textContent = (SPEED / S.BASE_SPEED).toFixed(2) + '×  ·  ' + totalReal(0).toFixed(1) + ' s'; };
     sp.addEventListener('input', upd); sp.addEventListener('click', (e) => e.stopPropagation()); upd();
   }
   gate.addEventListener('click', () => play(false));
