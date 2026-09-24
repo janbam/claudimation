@@ -247,7 +247,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.rnd = S.mulberry32(23460);
     this.voices = []; this.events = []; this.ei = 0;
     this.bus = { l: 0, r: 0, s: 0, tr: 0 }; this.bus2 = { l: 0, r: 0, s: 0, tr: 0 }; this.torn = false;
-    this.fdn = new FDN(sampleRate); this.master = new Master();
+    this.fdn = new FDN(sampleRate); this.fdn2 = new FDN(sampleRate); this.master = new Master();
     this.hpL = 0; this.hpR = 0; this.xl = 0; this.xr = 0;
     const K = S.RHY_K;
     this.rc = new Float64Array(K + 1); this.ry1 = new Float64Array(K + 1); this.ry2 = new Float64Array(K + 1);
@@ -367,7 +367,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     // (look at the spectrogram during the mirror, above 3 kHz)
     for (const w of ['top', 'bot']) this.voices.push(new Sine({ start: S.HEART.t0 - 0.05, ff: (t) => S.heartFreq(w, t), f: S.heartFreq(w, S.HEART.t0), send: 0, end: S.HEART.t1 + 0.1, amp: S.heartAmp }));
 
-    this.torn = t0 >= S.TEAR_T;
+    this.torn = t0 >= S.TEAR_T; this.dryGone = t0 >= S.TEAR_T + 0.07;
     ev.sort((a, b) => a.t - b.t);
     this.events = ev.filter((e) => e.t >= t0 - 0.01); this.ei = 0;
     const ph = S.rhyPhase(t0) / this.speed;
@@ -427,19 +427,29 @@ class CommaProcessor extends AudioWorkletProcessor {
       bus.l = 0; bus.r = 0; bus.s = 0;
       const b2 = this.bus2; b2.l = 0; b2.r = 0; b2.s = 0; b2.tr = tr;
       // the tear: everything from II stops dead (6 ms, so it doesn't click), and the room is emptied
+      // II → III: II plays into its own room (the comma room). during the held wobble that room grows; at the
+      // tear only the dry sound goes (60 ms), and B♯ against C keeps standing in the room, the beating
+      // dissolving in the wander, while the room shrinks back under the first bars of III.
       const TT = S.TEAR_T;
-      if (!this.torn && t >= TT) { this.torn = true; this.fdn.clear(); this.voices = this.voices.filter((v) => v.grp !== 2); }
+      if (!this.torn && t >= TT) { this.torn = true; this.fdn.clear(); } // III starts in an empty main room
+      if (t >= TT + 0.07 && !this.dryGone) { this.dryGone = true; this.voices = this.voices.filter((v) => v.grp !== 2); }
       const vs = this.voices;
       for (let v = 0; v < vs.length; v++) { if (!vs[v].run(t, vs[v].grp === 2 ? b2 : bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
-      const cut = this.torn ? 1 : S.clamp((TT - t) / 0.006, 0, 1);
-      bus.l += b2.l * cut; bus.r += b2.r * cut; bus.s += b2.s * cut;
+      const dry2 = 1 - S.smooth((t - TT) / 0.06);
+      bus.l += b2.l * dry2; bus.r += b2.r * dry2;
+      if (t > S.T.II - 0.1 && t < S.T.III + 5) {
+        const grow = S.ramp(t, S.WOBBLE_T - 0.3, TT);
+        this.fdn2.fb = 0.86 + (0.965 - 0.86) * grow * (1 - S.ramp(t, S.T.III + 0.6, S.T.III + 2.8)) + (0.9 - 0.86) * S.ramp(t, S.T.III + 0.6, S.T.III + 2.8);
+        this.fdn2.run(b2.s * dry2 * (1 + 1.5 * grow));
+        bus.l += this.fdn2.l; bus.r += this.fdn2.r;
+      }
       this.rhythmicon(t, bus);
       // the ending: more and more of the sound goes into the room, and the room grows (RT60 ≈ 2 s → ~10 s).
       // the picture stops at VIS_END; the room keeps ringing for another RING seconds.
       const endU = S.ramp(t, S.V_CLEAN[0], S.V_FADE[0] + 0.6);
       this.fdn.fb = 0.86 + (0.975 - 0.86) * endU; // the room is already big when the fade begins
       this.fdn.run(bus.s * (1 + 1.3 * endU));
-      const g = this.torn ? 1 : cut; // the room's own tail is cut with II, too
+      const g = 1;
       // while the dry still plays, the bigger room would swell the sum: hold its return back a little,
       // and release it as the dry fades, so the whole thing only ever goes down, and the tail keeps its length
       const hold = 1 - 0.4 * S.ramp(t, S.V_CLEAN[0], S.V_FADE[0] + 0.2) * (1 - S.ramp(t, S.V_FADE[0] + 0.3, S.VIS_END));
