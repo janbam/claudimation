@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>COMMA — a treatise in five axioms</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0d0b; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #gate { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #efe8da; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; cursor: pointer;
+    background: radial-gradient(ellipse at center, #1a1714 0%, #0e0d0b 70%); transition: opacity .6s; user-select: none; }
+  #gate h1 { font-weight: 400; letter-spacing: .5em; font-size: clamp(40px, 9vw, 120px); margin: 0 0 .2em .5em; }
+  #gate p { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 12px; letter-spacing: .2em; opacity: .55; margin: .4em; text-transform: uppercase; }
+  #gate .go { color: #d97757; opacity: 1; margin-top: 2.5em; animation: breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: .35; } }
+  #gate.gone { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="gate">
+  <h1>COMMA</h1>
+  <p>a treatise in five axioms · 30 seconds</p>
+  <p>531441 / 524288</p>
+  <p class="go">click to begin · headphones</p>
+  <p style="margin-top:3em;font-size:10px;opacity:.3">R — record webm &nbsp;·&nbsp; space — replay</p>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

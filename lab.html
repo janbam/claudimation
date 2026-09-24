@@ -1,0 +1,70 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>COMMA — lab</title>
+<style>body{background:#111;color:#ddd;font:12px monospace;margin:0}canvas{display:block}#s{padding:6px}</style>
+</head><body><div id="s">rendering…</div><canvas id="c"></canvas>
+<script type="module">
+const params = new URLSearchParams(location.search);
+const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? 30.3);
+const FMIN = +(params.get('fmin') ?? 30), FMAX = +(params.get('fmax') ?? 18000);
+const W = +(params.get('w') ?? 1800), H = +(params.get('h') ?? 900);
+const sr = 48000;
+
+async function render() {
+  const len = Math.ceil(30.4 * sr);
+  const ctx = new OfflineAudioContext(2, len, sr);
+  await ctx.audioWorklet.addModule('worklet.js');
+  const node = new AudioWorkletNode(ctx, 'comma', { outputChannelCount: [2], processorOptions: { autostart: true, at: 0, offset: 0 } });
+  node.connect(ctx.destination);
+  const t = performance.now();
+  const buf = await ctx.startRendering();
+  window.renderMs = performance.now() - t;
+  return buf;
+}
+
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+  for (let len = 2; len <= n; len <<= 1) {
+    const a = -2 * Math.PI / len, wr = Math.cos(a), wi = Math.sin(a);
+    for (let i = 0; i < n; i += len) { let cr = 1, ci = 0;
+      for (let j = 0; j < len / 2; j++) { const ur = re[i + j], ui = im[i + j], vr = re[i + j + len / 2] * cr - im[i + j + len / 2] * ci, vi = re[i + j + len / 2] * ci + im[i + j + len / 2] * cr;
+        re[i + j] = ur + vr; im[i + j] = ui + vi; re[i + j + len / 2] = ur - vr; im[i + j + len / 2] = ui - vi; const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr; } }
+  }
+}
+function cmap(v) { // magma-ish
+  const s = [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]];
+  v = Math.max(0, Math.min(1, v)) * (s.length - 1); const i = Math.floor(v), f = v - i; const a = s[i], b = s[Math.min(i + 1, s.length - 1)];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+const buf = await render();
+const L = buf.getChannelData(0), R = buf.getChannelData(1);
+const mono = new Float32Array(L.length); for (let i = 0; i < L.length; i++) mono[i] = 0.5 * (L[i] + R[i]);
+// stats
+let peak = 0, nan = 0; for (let i = 0; i < L.length; i++) { const a = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (a > peak) peak = a; if (!isFinite(L[i])) nan++; }
+const rms = []; for (let s = 0; s < 30.4; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
+window.stats = { renderMs: Math.round(window.renderMs), peak: peak.toFixed(3), nan, rmsPerHalfSec: rms.join(' ') };
+document.getElementById('s').textContent = JSON.stringify(window.stats);
+
+// spectrogram
+const N = 8192, c = document.getElementById('c'); c.width = W; c.height = H; const g = c.getContext('2d');
+const img = g.createImageData(W, H); const win = new Float32Array(N); for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+const re = new Float32Array(N), im = new Float32Array(N);
+for (let x = 0; x < W; x++) {
+  const tc = T0 + (T1 - T0) * x / W; const c0 = Math.floor(tc * sr) - N / 2;
+  for (let i = 0; i < N; i++) { const j = c0 + i; re[i] = (j >= 0 && j < mono.length ? mono[j] : 0) * win[i]; im[i] = 0; }
+  fft(re, im);
+  for (let y = 0; y < H; y++) {
+    const f = FMIN * Math.pow(FMAX / FMIN, 1 - y / H); const bin = f / sr * N;
+    const b0 = Math.floor(bin), fr = bin - b0;
+    const m0 = Math.hypot(re[b0], im[b0]), m1 = Math.hypot(re[b0 + 1], im[b0 + 1]);
+    const db = 20 * Math.log10((m0 + (m1 - m0) * fr) / (N / 4) + 1e-9);
+    const col = cmap((db + 90) / 85); const o = (y * W + x) * 4; img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+  }
+}
+g.putImageData(img, 0, 0);
+g.fillStyle = '#fff8'; g.font = '11px monospace';
+for (const f of [50, 64, 100, 128, 256, 512, 1000, 2000, 4000, 8000, 16000]) { if (f < FMIN || f > FMAX) continue; const y = H * (1 - Math.log(f / FMIN) / Math.log(FMAX / FMIN)); g.fillRect(0, y, 8, 1); g.fillText(f, 10, y + 4); }
+for (let s = Math.ceil(T0); s <= T1; s++) { const x = W * (s - T0) / (T1 - T0); g.fillRect(x, H - 8, 1, 8); g.fillText(s, x + 2, H - 10); }
+window.done = true;
+</script></body></html>
