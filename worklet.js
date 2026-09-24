@@ -38,21 +38,22 @@ class Sine {
 
 // modal plucked string: stiff (slightly inharmonic) partials, pluck-position comb,
 // frequency-dependent decay, a tension pitch-drop at the attack, and a little wooden body.
+const PLUCK_GAIN = 0.38; // −5 dB vs the brighter version, measured (the rounder spectrum alone would be +4 dB)
 class ModalPluck {
   constructor(t0, f, amp, pan, rnd, o = {}) {
     const sr = sampleRate; this.t0 = t0; this.inv = 1 / sr;
-    const B = o.B ?? 0.00018, pos = o.pos ?? (0.12 + 0.04 * rnd()), tau0 = o.tau ?? 2.4, cut = o.cut ?? 5200;
+    const B = o.B ?? 0.00018, pos = o.pos ?? (0.17 + 0.04 * rnd()), tau0 = o.tau ?? 2.4, cut = o.cut ?? 3200;
     this.bend = o.bend ?? 0.0045;
     const P = []; let norm = 0;
     for (let m = 1; m <= 32; m++) {
       const fm = m * f * Math.sqrt(1 + B * m * m); if (fm > Math.min(15000, sr * 0.45)) break;
-      const a = Math.sin(m * Math.PI * pos) / Math.pow(m, 0.8) / Math.sqrt(1 + Math.pow(fm / cut, 2));
-      const tau = Math.max(0.04, tau0 / (1 + Math.pow(fm / 1300, 1.3)));
+      const a = Math.sin(m * Math.PI * pos) / Math.pow(m, 0.95) / (1 + Math.pow(fm / cut, 2)); // 2nd-order rolloff: rounder
+      const tau = Math.max(0.04, tau0 / (1 + Math.pow(fm / 1050, 1.35))); // highs die a little sooner
       P.push({ fm, a, r: Math.exp(-1 / (tau * sr)), c: 1, s: 0, cw: 1, sw: 0, side: m % 2 ? 1 : -1 });
       norm += Math.abs(a);
     }
     for (const p of P) p.a *= 2.75 / norm; // +2 dB: the body used to carry some of the level
-    this.P = P; this.amp = amp; this.pan = pan; this.cnt = 0; this.rnd = rnd;
+    this.P = P; this.amp = amp * PLUCK_GAIN; this.pan = pan; this.cnt = 0; this.rnd = rnd;
     this.gl1 = panL(clampP(pan - 0.2)); this.gr2 = panR(clampP(pan + 0.2));
     this.life = tau0 * 3.2; this.send = o.send ?? 0.32;
     this.xp = 0; // (no body resonator any more: it knocked)
@@ -69,7 +70,7 @@ class ModalPluck {
       const y = s * p.a; if (p.side > 0) l += y; else r += y;
     }
     // pick: a 2 ms breath of high-passed noise, nothing low
-    let pick = 0; if (age < 0.002) { const x = (this.rnd() * 2 - 1) * (1 - age / 0.002); pick = (x - this.xp) * 0.03; this.xp = x; }
+    let pick = 0; if (age < 0.002) { const x = (this.rnd() * 2 - 1) * (1 - age / 0.002); pick = (x - this.xp) * 0.012; this.xp = x; }
     const A = this.amp * Math.min(1, age / 0.0015);
     const dl = (l * 0.8 + r * 0.2 + pick) * A, dr = (r * 0.8 + l * 0.2 + pick) * A;
     bus.l += dl * this.gl1; bus.r += dr * this.gr2;
@@ -157,7 +158,7 @@ class Sweep { // the tear: a sine falling through the floor, bit-crushed
     const crush = 1 + Math.floor(age * 120);
     if (this.hc++ % crush === 0) this.hold = Math.sign(Math.sin(TAU * this.ph)) * 0.5 + Math.sin(TAU * this.ph * 0.5) * 0.5;
     const y = this.hold * 0.22 * (1 - age / 0.28);
-    bus.l += y; bus.r -= y * 0.7; bus.s += y * 0.5;
+    bus.l += y; bus.r -= y * 0.7; // dry: nothing of II may bleed into III
     return true;
   }
 }
@@ -203,6 +204,10 @@ class FDN {
     this.lfo = 0; this.lfoInc = 0.3 / sr; this.dBase = [0.0070 * sr, 0.0093 * sr]; this.dDepth = 0.0002 * sr;
     this.hpc = 1 - Math.exp(-TAU * 350 / sr); this.xl = 0; this.xr = 0;
   }
+  clear() { // the tear: an empty room
+    for (const b of this.buf) b.fill(0); this.lp.fill(0); this.pre.fill(0); for (const a of this.ap) a.b.fill(0);
+    this.dL.fill(0); this.dR.fill(0); this.xl = 0; this.xr = 0; this.l = 0; this.r = 0;
+  }
   run(x) {
     const pre0 = this.pre[this.pi]; this.pre[this.pi] = x; this.pi = (this.pi + 1) % this.pre.length;
     let pre = pre0;
@@ -223,7 +228,7 @@ class FDN {
       this.buf[i][w] = o[i] * sc + pre * (i & 2 ? 0.5 : -0.5);
     }
     this.w = (w + 1) & m;
-    l *= 0.4; r *= 0.4;
+    l *= 0.283; r *= 0.283; // −3 dB
     // dimension: return only
     const dw = this.dw, dm = this.dm;
     this.dL[dw] = l; this.dR[dw] = r;
@@ -245,7 +250,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.running = false; this.dead = false; this.startAt = 0; this.offset = 0; this.speed = 1;
     this.rnd = S.mulberry32(23460);
     this.voices = []; this.events = []; this.ei = 0;
-    this.bus = { l: 0, r: 0, s: 0, tr: 0 };
+    this.bus = { l: 0, r: 0, s: 0, tr: 0 }; this.bus2 = { l: 0, r: 0, s: 0, tr: 0 }; this.torn = false;
     this.fdn = new FDN(sampleRate);
     this.hpL = 0; this.hpR = 0; this.xl = 0; this.xr = 0;
     const K = S.RHY_K;
@@ -267,6 +272,7 @@ class CommaProcessor extends AudioWorkletProcessor {
   build(t0) {
     const R = this.rnd; const ev = [];
     const at = (t, fn) => ev.push({ t, fn });
+    const II = (v) => { v.grp = 2; return v; }; // II's voices: cut dead at the tear
 
     // ── I: the drone, and a glassy ping for every partial as it arrives
     for (let k = 1; k <= S.PARTIALS; k++) {
@@ -284,8 +290,8 @@ class CommaProcessor extends AudioWorkletProcessor {
     const duck = (t) => 1 - S.ramp(t, S.T_COMMA_DUCK, S.T_COMMA_DUCK + 0.35);
     for (const n of S.FIFTHS) {
       const pan = (n.n % 2 ? 0.45 : -0.45) * (0.3 + n.n / 12);
-      at(n.t, () => new ModalPluck(n.t, n.freq, n.n === 12 ? 0.95 : 0.7, pan, R, { tau: 2.6 }));
-      at(n.t, () => new ModalPluck(n.t + 0.012, n.freq / 2, 0.22, -pan, R, { tau: 1.8, pos: 0.2 }));
+      at(n.t, () => II(new ModalPluck(n.t, n.freq, n.n === 12 ? 0.95 : 0.7, pan, R, { tau: 2.6 })));
+      at(n.t, () => II(new ModalPluck(n.t + 0.012, n.freq / 2, 0.22, -pan, R, { tau: 1.8, pos: 0.2 })));
       if (n.n < 12) {
         const lyd = n.n <= 6;
         this.voices.push(new Sine({ start: n.t, f: n.freq, pan: (n.n % 3 - 1) * 0.5, send: 0.45, end: 11, harm: [1, 0.25],
@@ -302,17 +308,17 @@ class CommaProcessor extends AudioWorkletProcessor {
     const bs = S.FIFTHS[12].freq;
     for (const c of S.COMMA_CALLS) {
       if (c.t === S.COMMA_T) continue; // the 13th fifth itself is the first call
-      if (c.who !== 'C') at(c.t, () => new ModalPluck(c.t, bs, 0.9, 0.5, R, { tau: 3 }));
-      if (c.who !== 'B♯') at(c.t, () => new ModalPluck(c.t + (c.who === 'both' ? 0.006 : 0), S.HOME, 0.9, -0.5, R, { tau: 3 }));
+      if (c.who !== 'C') at(c.t, () => II(new ModalPluck(c.t, bs, 0.9, 0.5, R, { tau: 3 })));
+      if (c.who !== 'B♯') at(c.t, () => II(new ModalPluck(c.t + (c.who === 'both' ? 0.006 : 0), S.HOME, 0.9, -0.5, R, { tau: 3 })));
     }
     const W0 = S.WOBBLE_T, W1 = S.TEAR_T;
     const wob = (lvl) => (t) => lvl * S.ramp(t, W0 - 0.05, W0 + 0.3) * (0.7 + 0.3 * S.ramp(t, W0, W1)) * (1 - S.ramp(t, W1 - 0.02, W1 + 0.02));
-    this.voices.push(new Sine({ start: W0 - 0.1, f: bs, pan: 0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) }));
-    this.voices.push(new Sine({ start: W0 - 0.1, f: S.HOME, pan: -0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) }));
-    this.voices.push(new Sine({ start: W0 - 0.1, f: S.HOME / 4, pan: 0, send: 0.15, end: 12.7, harm: [1, 0.3], amp: wob(0.16) }));
+    this.voices.push(II(new Sine({ start: W0 - 0.1, f: bs, pan: 0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
+    this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME, pan: -0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
+    this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME / 4, pan: 0, send: 0.15, end: 12.7, harm: [1, 0.3], amp: wob(0.16) })));
     // the tear
     at(S.TEAR_T, () => new Sweep(S.TEAR_T));
-    at(S.TEAR_T, () => new Noise({ t0: S.TEAR_T, dur: 0.25, rnd: R, fc: (a) => 9000 * Math.exp(-a / 0.05) + 200, q: 1.5, mode: 'bp', send: 0.6, amp: (a) => 0.5 * Math.exp(-a / 0.06) }));
+    at(S.TEAR_T, () => new Noise({ t0: S.TEAR_T, dur: 0.25, rnd: R, fc: (a) => 9000 * Math.exp(-a / 0.05) + 200, q: 1.5, mode: 'bp', send: 0, amp: (a) => 0.5 * Math.exp(-a / 0.06) }));
 
     // ── III: the bar has as many steps as the octave has notes
     for (let j = 0; j < 4; j++) {
@@ -373,6 +379,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     // (look at the spectrogram during the mirror, above 3 kHz)
     for (const w of ['top', 'bot']) this.voices.push(new Sine({ start: S.HEART.t0 - 0.05, ff: (t) => S.heartFreq(w, t), f: S.heartFreq(w, S.HEART.t0), send: 0, end: S.HEART.t1 + 0.1, amp: S.heartAmp }));
 
+    this.torn = t0 >= S.TEAR_T;
     ev.sort((a, b) => a.t - b.t);
     this.events = ev.filter((e) => e.t >= t0 - 0.01); this.ei = 0;
     const ph = S.rhyPhase(t0) / this.speed;
@@ -430,11 +437,25 @@ class CommaProcessor extends AudioWorkletProcessor {
       if (t > S.DUR + 0.3) { L[i] = 0; Rr[i] = 0; this.dead = true; continue; }
       while (this.ei < this.events.length && this.events[this.ei].t <= t) this.voices.push(this.events[this.ei++].fn());
       bus.l = 0; bus.r = 0; bus.s = 0;
+      const b2 = this.bus2; b2.l = 0; b2.r = 0; b2.s = 0; b2.tr = tr;
+      // the tear: everything from II stops dead (6 ms, so it doesn't click), and the room is emptied
+      const TT = S.TEAR_T;
+      if (!this.torn && t >= TT) { this.torn = true; this.fdn.clear(); this.voices = this.voices.filter((v) => v.grp !== 2); }
       const vs = this.voices;
-      for (let v = 0; v < vs.length; v++) { if (!vs[v].run(t, bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
+      for (let v = 0; v < vs.length; v++) { if (!vs[v].run(t, vs[v].grp === 2 ? b2 : bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
+      const cut = this.torn ? 1 : S.clamp((TT - t) / 0.006, 0, 1);
+      bus.l += b2.l * cut; bus.r += b2.r * cut; bus.s += b2.s * cut;
       this.rhythmicon(t, bus);
-      this.fdn.fbMul = t > S.TEAR_T && t < S.TEAR_T + 0.1 ? 0.2 : 1; // the tear cuts the room too
-      this.fdn.run(bus.s); const rl = this.fdn.l, rr = this.fdn.r;
+      // the ending: more and more of the sound goes into the room, and the room grows (RT60 ≈ 2 s → ~10 s).
+      // the picture stops at VIS_END; the room keeps ringing for another RING seconds.
+      const endU = S.ramp(t, S.V_CLEAN[0], S.V_FADE[0] + 0.6);
+      this.fdn.fb = 0.86 + (0.975 - 0.86) * endU; // the room is already big when the fade begins
+      this.fdn.run(bus.s * (1 + 1.3 * endU));
+      const g = this.torn ? 1 : cut; // the room's own tail is cut with II, too
+      // while the dry still plays, the bigger room would swell the sum: hold its return back a little,
+      // and release it as the dry fades, so the whole thing only ever goes down, and the tail keeps its length
+      const hold = 1 - 0.4 * S.ramp(t, S.V_CLEAN[0], S.V_FADE[0] + 0.2) * (1 - S.ramp(t, S.V_FADE[0] + 0.3, S.VIS_END));
+      const rl = this.fdn.l * g * hold, rr = this.fdn.r * g * hold;
       const l = bus.l + rl, r = bus.r + rr;
       const yl = l - this.xl + 0.9995 * this.hpL; this.xl = l; this.hpL = yl;
       const yr = r - this.xr + 0.9995 * this.hpR; this.xr = r; this.hpR = yr;

@@ -15,7 +15,10 @@ export const BASE_SPEED = 0.9;
 // in between, each tuning gets ×0.78 of the time of the last.
 const III_D = [3, 2.33, 1.83, 1.44, 1.17, 1.0].map((d) => d * BASE_SPEED);
 const III_LEN = III_D.reduce((a, b) => a + b);
-export const T = { I: 0, II: 4.5, III: 12.6, IV: 12.6 + III_LEN, V: 12.6 + III_LEN + 7.5, END: 12.6 + III_LEN + 7.5 + 8.5 + 12 / BEAT_HZ * BASE_SPEED + 0.2 }; // the fade lasts twelve comma-beats
+export const T = { I: 0, II: 4.5, III: 12.6, IV: 12.6 + III_LEN, V: 12.6 + III_LEN + 7.5, END: 12.6 + III_LEN + 7.5 + 8.5 + 12 / BEAT_HZ * BASE_SPEED + 0.2 + 9 * BASE_SPEED };
+// the fade lasts twelve comma-beats; then the picture stands still and the room rings on for 9 s
+export const RING = 9 * BASE_SPEED;
+export const VIS_END = T.END - RING;
 export const DUR = T.END;
 
 const TAU_ = Math.PI * 2;

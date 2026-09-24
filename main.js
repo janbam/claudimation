@@ -590,7 +590,7 @@ const totalReal = (off = 0) => preFor(off) + (S.DUR + 0.6 - off) / SPEED;
 function frameAt(tr, off = OFFSET) {
   const pre = preFor(off); TITLE_PRE = pre; CUR_TR = tr;
   const tt = tr - pre, t = off + tt * SPEED;
-  drawAt(clamp(t, 0, S.DUR), tt);
+  drawAt(clamp(t, 0, S.VIS_END), tt); // after VIS_END the picture stands still; only the room is still ringing
   return t;
 }
 window.frameAt = frameAt;
