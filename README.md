@@ -4,7 +4,7 @@ A ~45-second claudimation (3.6 s of title, then 41.8 s of piece). Canvas 2D + We
 from a shared deterministic score (`score.js`), so the visuals are computed from the same numbers you hear.
 
 ```
-python3 -m http.server 8765   # worklets need http, not file://
+python3 serve.py              # worklets need http, not file:// (and no-store, or Chrome caches the worklet)
 open http://localhost:8765/    # speed slider · click · space = replay · esc = back · R = record webm
 ```
 
