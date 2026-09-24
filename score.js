@@ -225,16 +225,17 @@ export function mirrorAmp(k, t) {
 }
 export const sparkAmp = (p, t) => p.amp * SPARK_GAIN * 1.6 * sparkIn(p, t) * (1 - ramp(t, V_FADE[0], V_FADE[1]));
 // the shape itself, for the visuals: winding j of the current sound, θ in radians
+export const vFade = (t) => 1 - ramp(t, V_FADE[0], V_FADE[1]);
 export function sparkW(th, t, j = 0) {
   let w = 0;
   for (let i = 0; i < SPARK.length; i++) {
     const p = SPARK[i];
-    let n = p.n, a = p.amp * sparkIn(p, t);
+    let n = p.n, a = sparkAmp(p, t) / (SPARK_GAIN * 1.6);
     if (i < RHY_K) { const f = mirrorFreq(i + 1, t); n = f / F_UNDER; a = mirrorAmp(i + 1, t) / (SPARK_GAIN * 1.6) ; }
     if (a < 1e-4) continue;
     w += a * Math.cos(n * (th + TAU_ * j) + p.psi);
   }
-  return w / SPARK_NORM;
+  return w / SPARK_NORM / Math.max(1e-3, vFade(t)); // the picture doesn't fade with the sound
 }
 // helpers for visuals
 export function sectionAt(t) {
