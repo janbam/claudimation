@@ -239,6 +239,9 @@ class Master {
   run(x, y) { this.l = Math.tanh(x * M_DRIVE) * M_CEIL; this.r = Math.tanh(y * M_DRIVE) * M_CEIL; }
 }
 
+// all of IV, trimmed (pre-master; the tanh master saturates the climax, so this was set by measuring LUFS)
+const IV_TRIM = Math.pow(10, -5.3 / 20); // −5.3 dB in ≈ −4 dB out, measured
+
 // ───────────────────────── the processor
 class CommaProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -246,14 +249,14 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.running = false; this.dead = false; this.startAt = 0; this.offset = 0; this.speed = 1;
     this.rnd = S.mulberry32(23460);
     this.voices = []; this.events = []; this.ei = 0;
-    this.bus = { l: 0, r: 0, s: 0, tr: 0 }; this.bus2 = { l: 0, r: 0, s: 0, tr: 0 }; this.torn = false;
+    this.bus = { l: 0, r: 0, s: 0, tr: 0 }; this.bus2 = { l: 0, r: 0, s: 0, tr: 0 }; this.bus3 = { l: 0, r: 0, s: 0, tr: 0 }; this.torn = false;
     this.fdn = new FDN(sampleRate); this.fdn2 = new FDN(sampleRate); this.master = new Master();
     this.hpL = 0; this.hpR = 0; this.xl = 0; this.xr = 0;
     const K = S.RHY_K;
     this.rc = new Float64Array(K + 1); this.ry1 = new Float64Array(K + 1); this.ry2 = new Float64Array(K + 1);
     this.rp = new Float64Array(K + 1); this.rl1 = new Float64Array(K + 1); this.rl2 = new Float64Array(K + 1);
     this.rCoef = []; for (let k = 1; k <= K; k++) this.rCoef[k] = { a1: 0, a2: 0, b: 0 };
-    this.rcnt = 0; this.rBody = 0; this.rTau = 0.06; this.rGain = 1.0;
+    this.rcnt = 0; this.rBody = 0; this.rTau = 0.06; this.rGain = IV_TRIM;
     this.rHP = new Float64Array(4); this.rHPc = 1 - Math.exp(-TAU * 35 / sampleRate);
     this.rPL = new Float64Array(K + 1); this.rPR = new Float64Array(K + 1);
     for (let k = 1; k <= K; k++) { const p = (k % 2 ? 1 : -1) * Math.min(0.85, k / 10); this.rPL[k] = panL(p); this.rPR[k] = panR(p); }
@@ -308,10 +311,13 @@ class CommaProcessor extends AudioWorkletProcessor {
       if (c.who !== 'B♯') at(c.t, () => II(new ModalPluck(c.t + (c.who === 'both' ? 0.006 : 0), S.HOME, 0.9, -0.5, R, { tau: 3 })));
     }
     const W0 = S.WOBBLE_T, W1 = S.TEAR_T;
-    const wob = (lvl) => (t) => lvl * S.ramp(t, W0 - 0.05, W0 + 0.3) * (0.7 + 0.3 * S.ramp(t, W0, W1)) * (1 - S.ramp(t, W1 - 0.02, W1 + 0.02));
-    this.voices.push(II(new Sine({ start: W0 - 0.1, f: bs, pan: 0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
-    this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME, pan: -0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
-    this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME / 4, pan: 0, send: 0.15, end: 12.7, harm: [1, 0.3], amp: wob(0.16) })));
+    // the wobble holds, then falls (S.FALL) — dry, and into the comma room. it is not cut at the tear.
+    const F0f = S.FALL.t0, F1f = S.FALL.t0 + S.FALL.len;
+    const wob = (lvl) => (t) => lvl * S.ramp(t, W0 - 0.05, W0 + 0.3) * (0.7 + 0.3 * S.ramp(t, W0, W1)) * (1 - S.ramp(t, F0f + 0.55 * S.FALL.len, F1f));
+    const FALLS = (v) => { v.grp = 3; return v; };
+    this.voices.push(FALLS(new Sine({ start: W0 - 0.1, f: bs, ff: (t) => bs * S.fallF(t), pan: 0.4, send: 0.3, end: F1f + 0.05, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
+    this.voices.push(FALLS(new Sine({ start: W0 - 0.1, f: S.HOME, ff: (t) => S.HOME * S.fallF(t), pan: -0.4, send: 0.3, end: F1f + 0.05, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
+    this.voices.push(FALLS(new Sine({ start: W0 - 0.1, f: S.HOME / 4, ff: (t) => S.HOME / 4 * S.fallF(t), pan: 0, send: 0.15, end: F1f + 0.05, harm: [1, 0.3], amp: wob(0.16) })));
     // ── III: the bar has as many steps as the octave has notes
     for (const nt of S.III_NOTES) {
       const seg = S.III_SEGS[nt.seg];
@@ -334,12 +340,12 @@ class CommaProcessor extends AudioWorkletProcessor {
     { const t4 = S.T.IV;
       this.voices.push(new Sine({ start: t4 - 0.005, f: 64, send: 0.05, end: t4 + 0.9, harm: [1, 0.28, 0.08],
         ff: (t) => 64 * Math.pow(0.25, S.smooth(S.clamp((t - t4) / 0.32, 0, 1))),
-        amp: (t) => 0.62 * S.ramp(t, t4 - 0.004, t4 + 0.004) * Math.exp(-Math.max(0, t - t4) / 0.2) }));
-      at(t4, () => new Kick(t4, 0.55, 50, R, 0.3));
-      at(t4, () => new Noise({ t0: t4, dur: 1.0, rnd: R, fc: () => 7000, q: 0.5, mode: 'hp', send: 0.7, amp: (a) => 0.07 * Math.exp(-a / 0.25) })); }
+        amp: (t) => 0.62 * IV_TRIM * S.ramp(t, t4 - 0.004, t4 + 0.004) * Math.exp(-Math.max(0, t - t4) / 0.2) }));
+      at(t4, () => new Kick(t4, 0.55 * IV_TRIM, 50, R, 0.3));
+      at(t4, () => new Noise({ t0: t4, dur: 1.0, rnd: R, fc: () => 7000, q: 0.5, mode: 'hp', send: 0.7, amp: (a) => 0.07 * IV_TRIM * Math.exp(-a / 0.25) })); }
 
     // ── IV → V: whoosh into the mirror
-    at(S.T.V - 1.6, () => new Noise({ t0: S.T.V - 1.6, dur: 1.62, rnd: R, fc: (a) => 250 * Math.pow(30, a / 1.6), q: 2.5, mode: 'bp', send: 0.4, amp: (a) => 0.16 * Math.pow(a / 1.6, 2.2) }));
+    at(S.T.V - 1.6, () => new Noise({ t0: S.T.V - 1.6, dur: 1.62, rnd: R, fc: (a) => 250 * Math.pow(30, a / 1.6), q: 2.5, mode: 'bp', send: 0.4, amp: (a) => 0.16 * IV_TRIM * Math.pow(a / 1.6, 2.2) }));
 
     // ── V: impact
     at(S.T.V, () => new Kick(S.T.V, 0.75, 38, R, 0.6));
@@ -396,7 +402,7 @@ class CommaProcessor extends AudioWorkletProcessor {
         const rate = k * r; const d = (k * ph - c) / (rate / sampleRate);
         const A = env * cresc / Math.pow(k, 0.35) / Math.sqrt(Math.max(1, rate * tau * 3));
         const dd = S.clamp(d, 0, 1); x += A * dd; this.rp[k] += A * (1 - dd);
-        if (k === 1 && r < 3 && t > S.T.IV - 0.01) this.voices.push(new Kick(t, 0.5 * (1 - r / 3.3), 44, this.rnd, 0.13));
+        if (k === 1 && r < 3 && t > S.T.IV - 0.01) this.voices.push(new Kick(t, 0.5 * IV_TRIM * (1 - r / 3.3), 44, this.rnd, 0.13));
       }
       const co = this.rCoef[k];
       const y = co.a1 * this.ry1[k] + co.a2 * this.ry2[k] + x * co.b; this.ry2[k] = this.ry1[k]; this.ry1[k] = y;
@@ -426,21 +432,24 @@ class CommaProcessor extends AudioWorkletProcessor {
       while (this.ei < this.events.length && this.events[this.ei].t <= t) this.voices.push(this.events[this.ei++].fn());
       bus.l = 0; bus.r = 0; bus.s = 0;
       const b2 = this.bus2; b2.l = 0; b2.r = 0; b2.s = 0; b2.tr = tr;
+      const b3 = this.bus3; b3.l = 0; b3.r = 0; b3.s = 0; b3.tr = tr;
       // the tear: everything from II stops dead (6 ms, so it doesn't click), and the room is emptied
-      // II → III: II plays into its own room (the comma room). during the held wobble that room grows; at the
-      // tear only the dry sound goes (60 ms), and B♯ against C keeps standing in the room, the beating
-      // dissolving in the wander, while the room shrinks back under the first bars of III.
+      // II → III: II plays into its own room (the comma room). one quarter before the beat the wobble falls four
+      // octaves (S.FALL), dry and into that room, which opens as it falls; the plucks' dry sound goes at the tear.
       const TT = S.TEAR_T;
       if (!this.torn && t >= TT) { this.torn = true; this.fdn.clear(); } // III starts in an empty main room
       if (t >= TT + 0.07 && !this.dryGone) { this.dryGone = true; this.voices = this.voices.filter((v) => v.grp !== 2); }
       const vs = this.voices;
-      for (let v = 0; v < vs.length; v++) { if (!vs[v].run(t, vs[v].grp === 2 ? b2 : bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
+      for (let v = 0; v < vs.length; v++) { const gv = vs[v].grp; if (!vs[v].run(t, gv === 2 ? b2 : gv === 3 ? b3 : bus)) { vs[v] = vs[vs.length - 1]; vs.pop(); v--; } }
       const dry2 = 1 - S.smooth((t - TT) / 0.06);
-      bus.l += b2.l * dry2; bus.r += b2.r * dry2;
-      if (t > S.T.II - 0.1 && t < S.T.III + 5) {
-        const grow = S.ramp(t, S.WOBBLE_T - 0.3, TT);
-        this.fdn2.fb = 0.86 + (0.965 - 0.86) * grow * (1 - S.ramp(t, S.T.III + 0.6, S.T.III + 2.8)) + (0.9 - 0.86) * S.ramp(t, S.T.III + 0.6, S.T.III + 2.8);
-        this.fdn2.run(b2.s * dry2 * (1 + 1.5 * grow));
+      bus.l += b2.l * dry2 + b3.l; bus.r += b2.r * dry2 + b3.r; // the falling wobble (grp 3) keeps its dry sound
+      const FE = S.FALL.t0 + S.FALL.len;
+      if (t > S.T.II - 0.1 && t < FE + 6) {
+        // the room opens with the fall (not before: then it would hold a ghost of the static tone), fills with the
+        // glissando, and holds until the fall is over
+        const grow = S.ramp(t, S.FALL.t0 - 0.05, S.FALL.t0 + 0.4), shrink = S.ramp(t, FE - 0.2, FE + 2.2);
+        this.fdn2.fb = 0.86 + (0.965 - 0.86) * grow * (1 - shrink) + (0.9 - 0.86) * shrink;
+        this.fdn2.run((b2.s * dry2 + b3.s) * (1 + 1.5 * grow));
         bus.l += this.fdn2.l; bus.r += this.fdn2.r;
       }
       this.rhythmicon(t, bus);

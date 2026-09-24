@@ -75,6 +75,10 @@ export const COMMA_CALLS = [
 ];
 export const WOBBLE_T = COMMA_T + 1.3;    // from here: pure 3.49 Hz disagreement
 export const TEAR_T = T.III - 0.14;
+// the comma falls: one quarter before the beat (in 12/16 at one bar per second: 1/3 s), both notes glide
+// down four octaves in 2.5 s, 256 → 16 Hz. the beating slows with them: 3.49 Hz → 0.22 Hz, then it's gone.
+export const FALL = { t0: T.III - (4 / 12) * BASE_SPEED, len: 2.5 * BASE_SPEED, ratio: 1 / 16 };
+export const fallF = (t) => Math.pow(FALL.ratio, smooth((t - FALL.t0) / FALL.len));
 
 // ───────────────────────── III. twelve is a rounding error
 // axiom-within-an-axiom: the bar has as many steps as the octave has notes.
