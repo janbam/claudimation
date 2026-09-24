@@ -3,14 +3,15 @@
 <style>body{background:#111;color:#ddd;font:12px monospace;margin:0}canvas{display:block}#s{padding:6px}</style>
 </head><body><div id="s">rendering…</div><canvas id="c"></canvas>
 <script type="module">
+import { DUR, F_UNDER } from './score.js';
 const params = new URLSearchParams(location.search);
-const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? 30.3);
+const T0 = +(params.get('from') ?? 0), T1 = +(params.get('to') ?? DUR + 0.3);
 const FMIN = +(params.get('fmin') ?? 30), FMAX = +(params.get('fmax') ?? 18000);
 const W = +(params.get('w') ?? 1800), H = +(params.get('h') ?? 900);
 const sr = 48000;
 
 async function render() {
-  const len = Math.ceil(30.4 * sr);
+  const len = Math.ceil((DUR + 0.4) * sr);
   const ctx = new OfflineAudioContext(2, len, sr);
   await ctx.audioWorklet.addModule('worklet.js');
   const node = new AudioWorkletNode(ctx, 'comma', { outputChannelCount: [2], processorOptions: { autostart: true, at: 0, offset: 0 } });
@@ -42,7 +43,7 @@ const L = buf.getChannelData(0), R = buf.getChannelData(1);
 const mono = new Float32Array(L.length); for (let i = 0; i < L.length; i++) mono[i] = 0.5 * (L[i] + R[i]);
 // stats
 let peak = 0, nan = 0; for (let i = 0; i < L.length; i++) { const a = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (a > peak) peak = a; if (!isFinite(L[i])) nan++; }
-const rms = []; for (let s = 0; s < 30.4; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
+const rms = []; for (let s = 0; s < DUR + 0.4; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
 window.stats = { renderMs: Math.round(window.renderMs), peak: peak.toFixed(3), nan, rmsPerHalfSec: rms.join(' ') };
 document.getElementById('s').textContent = JSON.stringify(window.stats);
 
@@ -66,5 +67,15 @@ g.putImageData(img, 0, 0);
 g.fillStyle = '#fff8'; g.font = '11px monospace';
 for (const f of [50, 64, 100, 128, 256, 512, 1000, 2000, 4000, 8000, 16000]) { if (f < FMIN || f > FMAX) continue; const y = H * (1 - Math.log(f / FMIN) / Math.log(FMAX / FMIN)); g.fillRect(0, y, 8, 1); g.fillText(f, 10, y + 4); }
 for (let s = Math.ceil(T0); s <= T1; s++) { const x = W * (s - T0) / (T1 - T0); g.fillRect(x, H - 8, 1, 8); g.fillText(s, x + 2, H - 10); }
+if (params.has('polar')) { // wind the rendered sound around its period: is the spark really in the audio?
+  const tp = +params.get('polar'); const per = sr / F_UNDER; const P = document.createElement('canvas'); P.width = P.height = 700; document.body.prepend(P);
+  const q = P.getContext('2d'); q.fillStyle = '#0b0914'; q.fillRect(0, 0, 700, 700);
+  let mx = 0; const i0 = Math.floor(tp * sr); for (let i = 0; i < per * 8; i++) mx = Math.max(mx, Math.abs(mono[i0 + i]));
+  for (let w = 7; w >= 0; w--) { q.beginPath();
+    for (let i = 0; i <= per; i++) { const v = mono[i0 + Math.floor(w * per + i)] / mx; const th = 2 * Math.PI * i / per - Math.PI / 2; const r = 150 + 140 * v + w * 5;
+      const x = 350 + r * Math.cos(th), y = 350 + r * Math.sin(th); i ? q.lineTo(x, y) : q.moveTo(x, y); }
+    q.strokeStyle = w ? 'rgba(255,255,255,0.25)' : '#d97757'; q.lineWidth = w ? 1 : 2.5; q.stroke(); }
+  q.fillStyle = '#fff'; q.font = '12px monospace'; q.fillText('rendered audio @ ' + tp + 's, wound at ' + F_UNDER.toFixed(3) + ' Hz', 10, 20);
+}
 window.done = true;
 </script></body></html>
