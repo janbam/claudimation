@@ -18,6 +18,13 @@ open http://localhost:8765/    # speed slider · click · space = replay · esc 
 
 **Speed.** The slider on the start screen (or `?speed=0.9`) changes tempo, never pitch. Things that are real frequencies stay real: the comma still beats at 3.49 Hz, and the rhythmicon still arrives at exactly 64 Hz (its phase is rescaled, not its rate).
 
+**The room.** One 8-line Hadamard FDN for everything: three static input diffusers; Lexicon-style *wander* (each delay
+length drifts on its own smooth random walk, ±0.17 ms, so the modes never sit still — ≤ 0.7¢ of drift, only in the tail,
+35× below the 3.49 Hz comma beat); output taps picked by measurement so the diffuse tail is decorrelated (the first
+version's taps gave an anti-phase tail that cancelled in mono); and a Dimension-D-style widener on the return only
+(7/9.3 ms, ±0.2 ms on opposite 0.3 Hz LFOs, high-passed polarity-inverted crossfeed). The dry signal is never modulated:
+the beating is the point.
+
 **Offline render** (deterministic, frame-exact, any resolution):
 
 ```

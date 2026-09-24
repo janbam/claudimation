@@ -163,28 +163,78 @@ class Sweep { // the tear: a sine falling through the floor, bit-crushed
 }
 
 // ───────────────────────── reverb: 8-line FDN, Hadamard feedback
+// 4-point Hermite read from a power-of-two ring buffer at a fractional position
+function herm(b, m, pos) {
+  const i = Math.floor(pos), f = pos - i;
+  const xm = b[(i - 1) & m], x0 = b[i & m], x1 = b[(i + 1) & m], x2 = b[(i + 2) & m];
+  const c1 = 0.5 * (x1 - xm), c2 = xm - 2.5 * x0 + 2 * x1 - 0.5 * x2, c3 = 0.5 * (x2 - xm) + 1.5 * (x0 - x1);
+  return ((c3 * f + c2) * f + c1) * f + x0;
+}
+const pow2 = (n) => { let p = 1; while (p < n) p <<= 1; return p; };
+
+// the room. an 8-line Hadamard FDN with
+//  · input diffusion (3 allpasses, static)
+//  · Lexicon-style "wander": every delay length drifts on its own smooth random walk, ±0.17 ms,
+//    so the modes never sit still. the drift is slow enough that the pitch moves ≤ 0.7¢ (only in the
+//    tail; the dry sound is never touched): at 256 Hz that's 0.1 Hz, 35× less than the 3.49 Hz comma beat
+//  · a Dimension-D-style widener on the *return only*: two short delays on opposite slow LFOs, with
+//    high-passed, polarity-inverted crossfeed. width by decorrelation, not by chorus; the bass stays mono.
 class FDN {
   constructor(sr) {
-    const base = [1031, 1327, 1523, 1871, 2053, 2311, 2677, 2963];
-    this.len = base.map((l) => Math.round(l * sr / 48000));
-    this.buf = this.len.map((l) => new Float32Array(l)); this.idx = new Int32Array(8);
+    const k = sr / 48000; this.sr = sr;
+    this.D0 = [1031, 1327, 1523, 1871, 2053, 2311, 2677, 2963].map((l) => l * k);
+    this.N = pow2(Math.ceil(2963 * k + 64)); this.m = this.N - 1; this.w = 0;
+    this.buf = this.D0.map(() => new Float32Array(this.N));
     this.lp = new Float32Array(8); this.o = new Float32Array(8); this.fb = 0.86; this.fbMul = 1; this.damp = 0.3;
+    // output taps: two sign patterns chosen (by measurement) so the diffuse tail comes out decorrelated (corr ≈ −0.1).
+    // the old even/odd taps shared the Hadamard pattern of the input and gave an anti-phase tail (corr −0.5):
+    // phasey on headphones, and it cancelled itself in mono.
+    this.tapL = [1, -1, -1, -1, -1, 1, 1, -1].map((x) => x * 0.5); this.tapR = [1, 1, 1, -1, -1, 1, -1, -1].map((x) => x * 0.5);
     this.pre = new Float32Array(Math.round(sr * 0.021)); this.pi = 0; this.l = 0; this.r = 0;
+    // wander
+    this.rnd = S.mulberry32(3490); this.WANDER = 8 * k;
+    this.off = new Float64Array(8); this.o1 = new Float64Array(8); this.tgt = new Float64Array(8); this.timer = new Int32Array(8);
+    this.ks = 1 - Math.exp(-1 / (0.3 * sr)); // two of these in series ≈ 0.6 s of glide
+    // input diffusion
+    this.ap = [142, 107, 379].map((d) => ({ b: new Float32Array(Math.round(d * k)), i: 0 })); this.apg = 0.6;
+    // dimension
+    this.DN = pow2(Math.ceil(0.012 * sr)); this.dm = this.DN - 1; this.dw = 0;
+    this.dL = new Float32Array(this.DN); this.dR = new Float32Array(this.DN);
+    this.lfo = 0; this.lfoInc = 0.3 / sr; this.dBase = [0.0070 * sr, 0.0093 * sr]; this.dDepth = 0.0002 * sr;
+    this.hpc = 1 - Math.exp(-TAU * 350 / sr); this.xl = 0; this.xr = 0;
   }
   run(x) {
-    const pre = this.pre[this.pi]; this.pre[this.pi] = x; this.pi = (this.pi + 1) % this.pre.length;
-    const o = this.o;
-    for (let i = 0; i < 8; i++) { const v = this.buf[i][this.idx[i]]; this.lp[i] += this.damp * (v - this.lp[i]); o[i] = this.lp[i]; }
+    const pre0 = this.pre[this.pi]; this.pre[this.pi] = x; this.pi = (this.pi + 1) % this.pre.length;
+    let pre = pre0;
+    for (const a of this.ap) { const d = a.b[a.i]; const y = d - this.apg * pre; a.b[a.i] = pre + this.apg * y; pre = y; if (++a.i >= a.b.length) a.i = 0; }
+    const o = this.o, m = this.m, w = this.w;
+    for (let i = 0; i < 8; i++) {
+      if (--this.timer[i] <= 0) { this.tgt[i] = (this.rnd() * 2 - 1) * this.WANDER; this.timer[i] = Math.round(this.sr * (0.5 + 1.1 * this.rnd())); }
+      this.o1[i] += this.ks * (this.tgt[i] - this.o1[i]); this.off[i] += this.ks * (this.o1[i] - this.off[i]);
+      const v = herm(this.buf[i], m, w - this.D0[i] - this.off[i]);
+      this.lp[i] += this.damp * (v - this.lp[i]); o[i] = this.lp[i];
+    }
     for (let h = 1; h < 8; h <<= 1) for (let i = 0; i < 8; i += h << 1) for (let j = i; j < i + h; j++) { const a = o[j], b = o[j + h]; o[j] = a + b; o[j + h] = a - b; }
     const sc = this.fb * this.fbMul / Math.sqrt(8);
     let l = 0, r = 0;
     for (let i = 0; i < 8; i++) {
       const v = this.lp[i];
-      if (i & 1) r += v; else l += v;
-      this.buf[i][this.idx[i]] = o[i] * sc + pre * (i & 2 ? 0.5 : -0.5);
-      if (++this.idx[i] >= this.len[i]) this.idx[i] = 0;
+      l += v * this.tapL[i]; r += v * this.tapR[i];
+      this.buf[i][w] = o[i] * sc + pre * (i & 2 ? 0.5 : -0.5);
     }
-    this.l = l * 0.35; this.r = r * 0.35;
+    this.w = (w + 1) & m;
+    l *= 0.4; r *= 0.4;
+    // dimension: return only
+    const dw = this.dw, dm = this.dm;
+    this.dL[dw] = l; this.dR[dw] = r;
+    this.lfo += this.lfoInc; if (this.lfo >= 1) this.lfo -= 1;
+    const s = Math.sin(TAU * this.lfo);
+    const wl = herm(this.dL, dm, dw - this.dBase[0] - this.dDepth * s), wr = herm(this.dR, dm, dw - this.dBase[1] + this.dDepth * s);
+    this.dw = (dw + 1) & dm;
+    this.xl += this.hpc * (wl - this.xl); this.xr += this.hpc * (wr - this.xr); // lowpass → subtract = highpass
+    const hl = wl - this.xl, hr = wr - this.xr;
+    this.l = 0.85 * (l + 0.25 * wl - 0.38 * hr);
+    this.r = 0.85 * (r + 0.25 * wr - 0.38 * hl);
   }
 }
 
@@ -203,6 +253,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.rp = new Float64Array(K + 1); this.rl1 = new Float64Array(K + 1); this.rl2 = new Float64Array(K + 1);
     this.rCoef = []; for (let k = 1; k <= K; k++) this.rCoef[k] = { a1: 0, a2: 0, b: 0 };
     this.rcnt = 0; this.rBody = 0; this.rTau = 0.06; this.rGain = 1.0;
+    this.rHP = new Float64Array(4); this.rHPc = 1 - Math.exp(-TAU * 35 / sampleRate);
     this.rPL = new Float64Array(K + 1); this.rPR = new Float64Array(K + 1);
     for (let k = 1; k <= K; k++) { const p = (k % 2 ? 1 : -1) * Math.min(0.85, k / 10); this.rPL[k] = panL(p); this.rPR[k] = panR(p); }
     this.port.onmessage = (e) => {
@@ -287,9 +338,9 @@ class CommaProcessor extends AudioWorkletProcessor {
 
     // ── III → IV: the landing. 64 Hz falls two octaves in a blink; the missing bit of π arrives.
     { const t4 = S.T.IV;
-      this.voices.push(new Sine({ start: t4 - 0.005, f: 64, send: 0.05, end: t4 + 1.4, harm: [1, 0.28, 0.08],
+      this.voices.push(new Sine({ start: t4 - 0.005, f: 64, send: 0.05, end: t4 + 0.9, harm: [1, 0.28, 0.08],
         ff: (t) => 64 * Math.pow(0.25, S.smooth(S.clamp((t - t4) / 0.32, 0, 1))),
-        amp: (t) => 0.62 * S.ramp(t, t4 - 0.004, t4 + 0.004) * Math.exp(-Math.max(0, t - t4) / 0.42) }));
+        amp: (t) => 0.62 * S.ramp(t, t4 - 0.004, t4 + 0.004) * Math.exp(-Math.max(0, t - t4) / 0.2) }));
       at(t4, () => new Kick(t4, 0.55, 50, R, 0.3));
       at(t4, () => new Noise({ t0: t4, dur: 1.0, rnd: R, fc: () => 7000, q: 0.5, mode: 'hp', send: 0.7, amp: (a) => 0.07 * Math.exp(-a / 0.25) })); }
 
@@ -341,6 +392,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     }
     const body = this.rBody, tau = this.rTau;
     const cresc = (0.55 + 1.3 * u * u * u) * this.rGain;
+    let bl = 0, br = 0;
     for (let k = 1; k <= S.RHY_K; k++) {
       const c = Math.floor(k * ph);
       let x = this.rp[k]; this.rp[k] = 0;
@@ -349,14 +401,20 @@ class CommaProcessor extends AudioWorkletProcessor {
         const rate = k * r; const d = (k * ph - c) / (rate / sampleRate);
         const A = env * cresc / Math.pow(k, 0.35) / Math.sqrt(Math.max(1, rate * tau * 3));
         const dd = S.clamp(d, 0, 1); x += A * dd; this.rp[k] += A * (1 - dd);
-        if (k === 1 && r < 4.5 && t > S.T.IV - 0.01) this.voices.push(new Kick(t, 0.5 * (1 - r / 5), 42, this.rnd, 0.35));
+        if (k === 1 && r < 3 && t > S.T.IV - 0.01) this.voices.push(new Kick(t, 0.5 * (1 - r / 3.3), 44, this.rnd, 0.13));
       }
       const co = this.rCoef[k];
       const y = co.a1 * this.ry1[k] + co.a2 * this.ry2[k] + x * co.b; this.ry2[k] = this.ry1[k]; this.ry1[k] = y;
       this.rl1[k] += 0.2 * (x - this.rl1[k]); this.rl2[k] += 0.2 * (this.rl1[k] - this.rl2[k]);
-      const o = y * (1 - 0.6 * body) + this.rl2[k] * body * 9;
+      const o = y * (1 - 0.6 * body), bo = this.rl2[k] * body * 9;
       bus.l += o * this.rPL[k]; bus.r += o * this.rPR[k]; bus.s += o * 0.18;
+      bl += bo * this.rPL[k]; br += bo * this.rPR[k];
     }
+    // the pulse fundamental rises through 5…64 Hz: keep the 64 Hz it becomes, lose the rumble on the way
+    const hc = this.rHPc, H = this.rHP;
+    H[0] += hc * (bl - H[0]); bl -= H[0]; H[1] += hc * (bl - H[1]); bl -= H[1];
+    H[2] += hc * (br - H[2]); br -= H[2]; H[3] += hc * (br - H[3]); br -= H[3];
+    bus.l += bl; bus.r += br; bus.s += (bl + br) * 0.09;
   }
 
   process(inputs, outputs) {

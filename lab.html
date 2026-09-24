@@ -45,7 +45,11 @@ const mono = new Float32Array(L.length); for (let i = 0; i < L.length; i++) mono
 // stats
 let peak = 0, nan = 0; for (let i = 0; i < L.length; i++) { const a = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (a > peak) peak = a; if (!isFinite(L[i])) nan++; }
 const rms = []; for (let s = 0; s < (DUR + 0.4) / SPEED - 0.5; s += 0.5) { let e = 0; const a = Math.floor(s * sr), b = Math.floor((s + 0.5) * sr); for (let i = a; i < b; i++) e += mono[i] * mono[i]; rms.push((20 * Math.log10(Math.sqrt(e / (b - a)) + 1e-9)).toFixed(1)); }
-window.stats = { renderMs: Math.round(window.renderMs), peak: peak.toFixed(3), nan, rmsPerHalfSec: rms.join(' ') };
+// stereo: L/R correlation and side/mid energy per section (real seconds at speed 1)
+const width = [[0, 5], [5, 14], [14, 24.8], [24.8, 33], [33, 42]].map(([a0, a1]) => { let lr = 0, ll = 0, rr = 0, m = 0, sd = 0;
+  for (let i = Math.floor(a0 * sr); i < Math.min(L.length, a1 * sr); i++) { lr += L[i] * R[i]; ll += L[i] * L[i]; rr += R[i] * R[i]; const M = L[i] + R[i], D = L[i] - R[i]; m += M * M; sd += D * D; }
+  return `${a0}-${a1}s corr ${(lr / Math.sqrt(ll * rr)).toFixed(3)} S/M ${(10 * Math.log10(sd / m)).toFixed(1)}dB`; });
+window.stats = { renderMs: Math.round(window.renderMs), peak: peak.toFixed(3), nan, width: width.join(' | '), rmsPerHalfSec: rms.join(' ') };
 document.getElementById('s').textContent = JSON.stringify(window.stats);
 
 // spectrogram
