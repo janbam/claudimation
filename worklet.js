@@ -149,20 +149,6 @@ class Noise { // filtered noise via TPT state-variable filter, optional tonal bo
   }
 }
 
-class Sweep { // the tear: a sine falling through the floor, bit-crushed
-  constructor(t0) { this.t0 = t0; this.ph = 0; this.inv = 1 / sampleRate; this.hold = 0; this.hc = 0; }
-  run(t, bus) {
-    const age = t - this.t0; if (age < 0) return true; if (age > 0.28) return false;
-    const f = 30 + 2600 * Math.exp(-age / 0.045);
-    this.ph += f * this.inv;
-    const crush = 1 + Math.floor(age * 120);
-    if (this.hc++ % crush === 0) this.hold = Math.sign(Math.sin(TAU * this.ph)) * 0.5 + Math.sin(TAU * this.ph * 0.5) * 0.5;
-    const y = this.hold * 0.22 * (1 - age / 0.28);
-    bus.l += y; bus.r -= y * 0.7; // dry: nothing of II may bleed into III
-    return true;
-  }
-}
-
 // ───────────────────────── reverb: 8-line FDN, Hadamard feedback
 // 4-point Hermite read from a power-of-two ring buffer at a fractional position
 function herm(b, m, pos) {
@@ -243,6 +229,16 @@ class FDN {
   }
 }
 
+// ───────────────────────── master: drive into the same tanh saturation as always, with a lower ceiling.
+// (tried: a slow compressor, then a lookahead limiter. both ducked the IV climax, whose 12 aligned pulses make
+// huge peaks; the tanh just rounds those peaks off, which is part of IV's sound.) small signals get +2 dB,
+// the climax mostly saturates harder. ceiling 0.79 = −2 dBFS sample peak ≈ −1 dBTP after inter-sample overshoot.
+const M_DRIVE = 1.1 * Math.pow(10, 3.3 / 20), M_CEIL = 0.79;
+class Master {
+  constructor() { this.l = 0; this.r = 0; }
+  run(x, y) { this.l = Math.tanh(x * M_DRIVE) * M_CEIL; this.r = Math.tanh(y * M_DRIVE) * M_CEIL; }
+}
+
 // ───────────────────────── the processor
 class CommaProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -251,7 +247,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.rnd = S.mulberry32(23460);
     this.voices = []; this.events = []; this.ei = 0;
     this.bus = { l: 0, r: 0, s: 0, tr: 0 }; this.bus2 = { l: 0, r: 0, s: 0, tr: 0 }; this.torn = false;
-    this.fdn = new FDN(sampleRate);
+    this.fdn = new FDN(sampleRate); this.master = new Master();
     this.hpL = 0; this.hpR = 0; this.xl = 0; this.xr = 0;
     const K = S.RHY_K;
     this.rc = new Float64Array(K + 1); this.ry1 = new Float64Array(K + 1); this.ry2 = new Float64Array(K + 1);
@@ -316,15 +312,7 @@ class CommaProcessor extends AudioWorkletProcessor {
     this.voices.push(II(new Sine({ start: W0 - 0.1, f: bs, pan: 0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
     this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME, pan: -0.4, send: 0.3, end: 12.7, harm: [1, 0.55, 0.35, 0.2, 0.12], amp: wob(0.15) })));
     this.voices.push(II(new Sine({ start: W0 - 0.1, f: S.HOME / 4, pan: 0, send: 0.15, end: 12.7, harm: [1, 0.3], amp: wob(0.16) })));
-    // the tear
-    at(S.TEAR_T, () => new Sweep(S.TEAR_T));
-    at(S.TEAR_T, () => new Noise({ t0: S.TEAR_T, dur: 0.25, rnd: R, fc: (a) => 9000 * Math.exp(-a / 0.05) + 200, q: 1.5, mode: 'bp', send: 0, amp: (a) => 0.5 * Math.exp(-a / 0.06) }));
-
     // ── III: the bar has as many steps as the octave has notes
-    for (let j = 0; j < 4; j++) {
-      this.voices.push(new Sine({ start: S.T.III - 0.01, ff: (t) => S.padChord(S.tuningAt(t))[j], pan: j / 3 * 1.2 - 0.6, send: 0.5, end: S.T.IV + 0.3, harm: [1, 0.3, 0.1],
-        amp: (t) => 0.04 * S.ramp(t, S.T.III, S.T.III + 0.3) * (1 - S.ramp(t, S.T.IV - 0.25, S.T.IV - 0.05)) }));
-    }
     for (const nt of S.III_NOTES) {
       const seg = S.III_SEGS[nt.seg];
       const ratio = seg.P === 3 ? 2 : seg.cont ? 1 : [1, 1, 2, 1][nt.seg] ?? 1;
@@ -398,7 +386,7 @@ class CommaProcessor extends AudioWorkletProcessor {
       this.rBody = S.smooth((r - 4) / 40); this.rTau = tau;
     }
     const body = this.rBody, tau = this.rTau;
-    const cresc = (0.55 + 1.3 * u * u * u) * this.rGain;
+    const cresc = (0.55 + 0.75 * u * u * u) * this.rGain; // top 3 dB lower than before: still a climb, no longer 7 dB above everything
     let bl = 0, br = 0;
     for (let k = 1; k <= S.RHY_K; k++) {
       const c = Math.floor(k * ph);
@@ -460,7 +448,7 @@ class CommaProcessor extends AudioWorkletProcessor {
       const yl = l - this.xl + 0.9995 * this.hpL; this.xl = l; this.hpL = yl;
       const yr = r - this.xr + 0.9995 * this.hpR; this.xr = r; this.hpR = yr;
       const fade = S.clamp((S.DUR + 0.3 - t) / 0.3, 0, 1);
-      L[i] = Math.tanh(yl * 1.1) * 0.92 * fade; Rr[i] = Math.tanh(yr * 1.1) * 0.92 * fade;
+      this.master.run(yl, yr); L[i] = this.master.l * fade; Rr[i] = this.master.r * fade;
     }
     return true;
   }

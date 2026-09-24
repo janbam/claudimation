@@ -25,16 +25,23 @@ version's taps gave an anti-phase tail that cancelled in mono); and a Dimension-
 (7/9.3 ms, ±0.2 ms on opposite 0.3 Hz LFOs, high-passed polarity-inverted crossfeed). The dry signal is never modulated:
 the beating is the point.
 
+**Master.** Drive into a tanh saturation (the same colour the piece always had) with the ceiling at 0.79: small signals
++2 dB, the IV climax (12 pulses aligning once per cycle) rounds off instead of ducking. Measured on the render:
+−10.4 LUFS integrated, −1.0 dBTP, LRA 7.7 LU. (A glue compressor and a lookahead limiter were tried; both turned
+the IV crescendo into a slump.)
+
 **Offline render** (deterministic, frame-exact, any resolution):
 
 ```
-python3 render.py                                   # 1920x1080 · 60 fps · speed 1 · 2x supersampled · h264 crf 12 → comma.mp4
-python3 render.py -W 3840 -H 2160 --ss 1 --speed 0.9 -o comma-4k.mp4
+python3 render.py                                   # 2560x1440 · 60 fps · 1.5x supersampled · h264 crf 16 (aq-mode 3) + AAC 320k → comma.mp4
+python3 render.py -W 1920 -H 1080 --ss 2                # 1080p
+python3 render.py -W 3840 -H 2160 --ss 1 -o comma-4k.mp4
 python3 render.py --codec prores -o comma.mov       # ProRes 422 HQ 10-bit + 24-bit PCM, for editing
 ```
 
 It launches headless Chrome on `index.html?render&w=…&h=…&fps=…&speed=…&ss=…`, which renders the audio with an
 OfflineAudioContext, then draws every frame at exactly t = i/fps and streams raw RGBA to `render.py` → ffmpeg.
+1440p is the default because YouTube serves 1440p uploads with VP9/AV1 at a higher bitrate, even to 1080p viewers.
 The layout is computed at a logical height of 1080, so 720p and 4K frame identically. `--browser` opens it in your
 normal browser instead.
 

@@ -293,10 +293,6 @@ function drawIII(t) {
   const hg = g.createLinearGradient(CX, CY, ...polar(R0, ah)); hg.addColorStop(0, rgba(col0, 0)); hg.addColorStop(1, rgba(col0, 0.9 * fa));
   g.strokeStyle = hg; g.lineWidth = 3; g.beginPath(); g.moveTo(CX, CY); g.lineTo(...polar(R0 + 30, ah)); g.stroke();
   g.strokeStyle = rgba(CREAM, (0.2 + 0.6 * se) * fa); g.lineWidth = 1 + 3 * se; g.beginPath(); g.arc(CX, CY, R0 * (1.18 + 0.05 * se), 0, TAU); g.stroke();
-  // pad chord polygon
-  const pc = S.padChord(tn); g.beginPath();
-  pc.forEach((f, i) => { const a = TAU * ((Math.log(f / 128) / Math.log(P)) % 1) - Math.PI / 2; const p = polar(R0 * 0.55 * (1 + 0.08 * ke), a); i ? g.lineTo(...p) : g.moveTo(...p); });
-  g.closePath(); g.fillStyle = rgba(col0, 0.14 * fa); g.fill(); g.strokeStyle = rgba(col0, 0.7 * fa); g.lineWidth = 2; g.stroke();
   // notes as rays of colour
   for (const nt of S.III_NOTES) {
     const age = t - nt.t; if (age < 0) break; if (age > 0.7) continue;

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Offline renderer for COMMA: deterministic frames + offline audio → ffmpeg → a proper video file.
 
-    python3 render.py                                  # 1920x1080, 60 fps, speed 1, h264 (crf 12) → comma.mp4
+    python3 render.py                                  # 2560x1440 60 fps, 1.5x supersampled, h264 crf 16 + AAC 320k → comma.mp4
+                                                       # (1440p: YouTube serves it with VP9/AV1 at higher bitrate, even to 1080p viewers)
     python3 render.py -W 3840 -H 2160 --fps 60 --ss 1 --speed 0.9 -o comma-4k.mp4
     python3 render.py --codec prores -o comma.mov      # ProRes 422 HQ, 10-bit, for editing
     python3 render.py --browser                        # don't launch headless Chrome; open the URL yourself
@@ -13,14 +14,14 @@ import argparse, time, http.server, json, os, shutil, subprocess, sys, tempfile,
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument('-W', '--width', type=int, default=1920)
-ap.add_argument('-H', '--height', type=int, default=1080)
+ap.add_argument('-W', '--width', type=int, default=2560)
+ap.add_argument('-H', '--height', type=int, default=1440)
 ap.add_argument('--fps', type=float, default=60)
 ap.add_argument('--speed', type=float, default=1.0, help='tempo factor (pitches never change)')
-ap.add_argument('--ss', type=float, default=2, help='supersampling factor for the canvas (2 = draw at 2x, downscale)')
+ap.add_argument('--ss', type=float, default=1.5, help='supersampling factor for the canvas (1.5 = draw at 1.5x, downscale)')
 ap.add_argument('--pre', type=float, default=3.6, help='seconds of title before the first sound')
 ap.add_argument('--codec', choices=['h264', 'h265', 'prores'], default='h264')
-ap.add_argument('--crf', type=int, default=12, help='h264/h265 quality (lower = better; 12 is near-transparent)')
+ap.add_argument('--crf', type=int, default=16, help='h264/h265 quality (lower = better; 16 = clean upload master, 12 = near-transparent)')
 ap.add_argument('--port', type=int, default=8777)
 ap.add_argument('--browser', action='store_true', help='open in your normal browser instead of headless Chrome')
 ap.add_argument('--chrome', default=None, help='path to chrome/chromium (default: autodetect)')
@@ -40,7 +41,8 @@ def video_args():
     if A.codec == 'h265':
         return ['-c:v', 'libx265', '-preset', 'slow', '-crf', str(A.crf), '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1']
     # dark gradients band easily: slow preset, low crf, film tune, full-quality chroma planes where possible
-    return ['-c:v', 'libx264', '-preset', 'slow', '-crf', str(A.crf), '-tune', 'film', '-pix_fmt', 'yuv420p', '-profile:v', 'high']
+    # aq-mode 3 spends bits on dark flat areas, where 8-bit gradients band first
+    return ['-c:v', 'libx264', '-preset', 'slow', '-crf', str(A.crf), '-x264-params', 'aq-mode=3', '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-g', str(int(A.fps * 2))]
 
 
 class H(http.server.SimpleHTTPRequestHandler):
