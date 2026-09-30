@@ -51,3 +51,7 @@ normal browser instead.
 Look between 33.4 and 35.6 s, above 3 kHz. `lab.html?polar=41&from=32` winds the rendered audio at 21.33 Hz — the spark, from the sound itself.
 
 `index.html?frame=21.5` draws a single frozen frame; `index.html?t=18` plays from an offset.
+
+---
+
+Free under the [Comma License](LICENSE.md): do anything with it, just don't cause harm or discontent. PRs and friendly chats in the issues are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
