@@ -145,12 +145,14 @@ function camera(t) {
 function applyCam(c) { g.translate(CX + c.sx, CY + c.sy); g.scale(c.zoom, c.zoom); g.rotate(c.rot); g.translate(-c.fx, -c.fy); }
 
 // ───────────────────────── backgrounds
+// (Carrier Wave photosensitivity edit) III's whole-frame kick pulse at 30% of its old swing
+const BG_KICK = 0.3;
 function background(t) {
   g.fillStyle = rgba(INK, 1); g.fillRect(0, 0, W, H);
   const sec = S.sectionAt(t);
   const hues = [265, 195, 320, 285, 220];
   let hue = hues[sec], lum = 0.16, amt = 0.55;
-  if (sec === 2) { const tn = S.tuningAt(t); hue = 320 + tn.i * 47; amt = 0.45 + 0.5 * kickEnv(t); }
+  if (sec === 2) { const tn = S.tuningAt(t); hue = 320 + tn.i * 47; amt = 0.45 + 0.5 * BG_KICK * kickEnv(t); }
   if (sec === 3) { amt = 0.4 + 0.5 * ramp(t, S.T.IV + 3, S.T.V); hue = lerp(285, 330, ramp(t, S.T.IV, S.T.V)); }
   if (t > S.V_SETTLE[0]) { hue = lerp(220, 18, ramp(t, S.V_SETTLE[0], S.V_BLOOM[0])); }
   if (t > S.V_FADE[0]) amt *= 0.2 + 0.8 * S.vFade(t); // the room goes dark with the logo
@@ -165,7 +167,7 @@ function background(t) {
   // III: kick strobe in the colour of the last note
   if (sec === 2) {
     const n = S.III_NOTES.filter((x) => x.t <= t).at(-1);
-    if (n) { g.fillStyle = rgba(pcol(n.freq, 1, 0.5), 0.16 * kickEnv(t)); g.fillRect(0, 0, W, H); }
+    if (n) { g.fillStyle = rgba(pcol(n.freq, 1, 0.5), 0.16 * BG_KICK * kickEnv(t)); g.fillRect(0, 0, W, H); }
   }
   if (t > S.T.IV && t < S.T.IV + 0.5) { g.fillStyle = rgba(CLAUDE, 0.35 * Math.exp(-(t - S.T.IV) / 0.1)); g.fillRect(0, 0, W, H); }
   // IV → V: the drop
@@ -329,12 +331,14 @@ function drawIV(t) {
   const fa = ramp(t, S.T.IV - 0.05, S.T.IV + 0.1) * (1 - ramp(t, S.T.V, S.T.V + 0.25));
   const ph = rhyPh(t), r = S.rhyRate(t);
   const since1 = (ph - Math.floor(ph)) / r;
-  if (r < 8) { const e = Math.exp(-since1 / 0.12) * fa * (1 - r / 8); glow(CX, CY, U * 1.2, MAGENTA, 0.25 * e); }
+  if (r < 8) { const e = Math.exp(-since1 / 0.12) * fa * (1 - r / 8); glow(CX, CY, U * 1.2, MAGENTA, 0.25 * e * (1 - ramp(r, 2, 3))); } // (Carrier Wave edit) the big glow fades out before 3 pulses/s
   g.lineCap = 'round';
   for (let k = 1; k <= S.RHY_K; k++) {
     const rk = U * (0.14 + 0.07 * k), col = pcol(S.F0 * k);
-    const pk = k * ph, since = (pk - Math.floor(pk)) / (k * r), flash = Math.exp(-since / 0.07);
-    const hz = k * r, tone = smooth(Math.log2(hz / 35));
+    const pk = k * ph, since = (pk - Math.floor(pk)) / (k * r), hz = k * r;
+    // (Carrier Wave edit) above 3 pulses/s a partial's flash keeps its average but its swing shrinks as 3/hz
+    const fl0 = Math.exp(-since / 0.07), fm = 0.07 * hz * (1 - Math.exp(-1 / (0.07 * hz))), flash = fm + (fl0 - fm) * Math.min(1, 3 / hz);
+    const tone = smooth(Math.log2(hz / 35));
     g.lineWidth = 1 + tone * 3.5;
     g.strokeStyle = rgba(col, (0.12 + 0.35 * flash * (1 - tone) + 0.75 * tone) * fa);
     g.beginPath(); g.arc(CX, CY, rk, 0, TAU); g.stroke();
@@ -344,7 +348,7 @@ function drawIV(t) {
       g.beginPath(); g.arc(CX, CY, rk, a - trail * (s2 + 1) / 8, a - trail * s2 / 8); g.stroke(); }
     const [x, y] = polar(rk, a);
     dot(x, y, 3 + 3 * flash * (1 - tone), col, fa * (1 - tone * 0.7));
-    if (r < 12) burst(...polar(rk, -Math.PI / 2), since, 6, col, k * 1000 + Math.floor(pk), 90, 0.4, 1.8);
+    if (r < 12) { g.globalAlpha = Math.min(1, 3 / hz); burst(...polar(rk, -Math.PI / 2), since, 6, col, k * 1000 + Math.floor(pk), 90, 0.4, 1.8); g.globalAlpha = 1; }
     const [tx, ty] = polar(rk, -Math.PI / 2); dot(tx, ty, 2 + 5 * flash, [255, 255, 255], flash * fa * (1 - tone), 3);
   }
   g.lineCap = 'butt';
